@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>three.js svg - lines</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+        svg {
+            display: block;
+        }
+    </style>
+</head>
+
+<body>
+
+    <script type="importmap">
+			{
+				"imports": {
+                    "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js",
+                    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.125.0/examples/jsm/"
+				}
+			}
+		</script>
+
+    <script type="module">
+
+        import * as THREE from 'three';
+
+        import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GUI } from 'https://unpkg.com/three@0.167.1/examples/jsm/libs/lil-gui.module.min.js';
+
+
+        //THREE.ColorManagement.enabled = false;
+
+        let camera, controls, scene, renderer;
+        let cube, object, box;
+        let strip1, strip2, strip3;
+
+        const container = document.body;
+
+        var kStroke = 0.3;
+        const baseDims = { w: 4, h: 2, d: 2 };
+
+        const clock = new THREE.Clock();
+
+        let rotateEnabled = false;
+
+        const params = {
+            bg: '#000000', // initial color
+            cStroke: '#ffffff',
+        };
+
+        // any material that should follow cStroke goes here
+        const strokeMats = new Set();
+
+        function trackStrokeMaterial(mat) {
+            // tag & set initial color
+            if (mat && mat.color) mat.color.set(params.cStroke);
+            strokeMats.add(mat);
+            return mat; // so you can inline it
+        }
+
+        function setStrokeColor(v) {
+            strokeMats.forEach((mat) => {
+                if (!mat) return;
+                if (Array.isArray(mat)) {
+                    mat.forEach(m => m?.color?.set(v));
+                } else {
+                    mat.color?.set(v);
+                }
+            });
+        }
+        const matWhiteDS = trackStrokeMaterial(
+            new THREE.MeshBasicMaterial({ color: params.cStroke, side: THREE.DoubleSide })
+        );
+        const matLine = trackStrokeMaterial(
+            new THREE.LineBasicMaterial({ color: params.cStroke })
+        );
+
+        init();
+
+        //====================strip functions start====================
+
+        function worldVertex(geometry, i, mesh) {
+            return new THREE.Vector3().fromBufferAttribute(geometry.attributes.position, i).applyMatrix4(mesh.matrixWorld);
+        }
+
+        function makeLine(a, b) {
+            const g = new THREE.BufferGeometry().setFromPoints([a, b]);
+            return new THREE.Line(g, matLine);
+        }
+
+        // Quad builder with UVs
+        function makeQuad(p0, p1, p2, p3, material) {
+            const g = new THREE.BufferGeometry();
+            g.setAttribute(
+                'position',
+                new THREE.Float32BufferAttribute([
+                    p0.x, p0.y, p0.z,
+                    p1.x, p1.y, p1.z,
+                    p2.x, p2.y, p2.z,
+                    p3.x, p3.y, p3.z
+                ], 3)
+            );
+            // assume points are ordered around the perimeter (p0->p1->p2->p3)
+            g.setIndex([0, 1, 2, 0, 2, 3]);
+            g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+            g.computeVertexNormals();
+            g.computeBoundingSphere();
+            return new THREE.Mesh(g, material);
+        }
+
+        // Build a “strip” from segment A->B with a single offset vector
+        function makeStrip(A, B, offset, material) {
+            return makeQuad(
+                A.clone(),                   // p0
+                B.clone(),                   // p1
+                B.clone().add(offset),       // p2
+                A.clone().add(offset),       // p3
+                material
+            );
+        }
+
+        // Build strips those offset applied in opposite dirs
+        function makeCenteredStrip(A, B, offset, material) {
+            return makeQuad(
+                A.clone(),   // p0
+                A.clone().add(offset),   // p3
+                B.clone(),   // p1
+                B.clone().sub(offset),   // p2
+                material
+            );
+        }
+
+        // Remove old strips safely
+        function clearStrips() {
+            [strip1, strip2, strip3].forEach((m) => {
+                if (!m) return;
+                scene.remove(m);
+                m.geometry.dispose();
+                // m.material.dispose(); // only if not reusing matWhiteDS
+            });
+            strip1 = strip2 = strip3 = undefined;
+        }
+
+        // Recompute vertices from the current box and rebuild the 3 strips
+        function rebuildStrips() {
+            if (!cube || !object) return;
+
+            object.updateMatrixWorld(true);   // important after any resize/scale
+            box.update();
+
+            // line 1 (5 -> 7)
+            const vStart1 = worldVertex(cube, 5, object);
+            const vEnd1 = worldVertex(cube, 7, object);
+            const xOffset = new THREE.Vector3(kStroke, 0, 0);
+
+            // line 2 (your order: index 1 -> midpoint of line1)
+            const vStart2 = worldVertex(cube, 1, object);
+            const vEnd2 = vStart1.clone().add(vEnd1).multiplyScalar(0.5);
+            const t = 0.1;
+
+            const vStart3 = vEnd2.clone().lerp(vStart2, t);
+            //const vStart3 = vEnd2.clone().lerp(vStart2, t).sub(new THREE.Vector3(0, kStroke, 0));
+
+            // line 3 (vStart3 -> index 2)
+            const v2 = worldVertex(cube, 2, object);
+
+            // offsets
+            const yOffsetNeg = new THREE.Vector3(0, -kStroke, 0);
+            const yOffsetPos = new THREE.Vector3(0, kStroke, 0);
+
+            clearStrips();
+
+            strip1 = makeStrip(vStart1, vEnd1, xOffset, matWhiteDS);
+            strip2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS);
+            //strip3 = makeStrip(v2, vStart3, yOffsetPos, matWhiteDS);
+            strip3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS);
+            addOutline(strip1);
+            addOutline(strip2);
+            addOutline(strip3);
+
+            scene.add(strip1, strip2, strip3);
+
+            strip2.material.depthWrite = false;
+            strip1.material.depthWrite = false;
+            strip1.renderOrder = 0;
+            strip2.renderOrder = 1;
+        }
+
+        function addOutline(strip, alwaysOnTop = true) {
+            const edges = new THREE.EdgesGeometry(strip.geometry, 1); // 1° threshold
+
+            // Make the outline always visible on top:
+            if (alwaysOnTop) {
+                matLine.depthTest = false;   // ignore depth test
+                matLine.depthWrite = false;   // don't write to depth
+            }
+
+            const lines = new THREE.LineSegments(edges, matLine);
+            lines.renderOrder = (strip.renderOrder || 0) + 10; // draw after the fill
+            strip.add(lines); // parent so it follows transforms
+            return lines;
+        }
+
+        //====================strip functions end====================
+
+        //====================box resize functions start====================
+
+        function applyBoxSize() {
+            if (!object) return;
+
+            if (boxParams.mode === 'Scale') {
+                // scale relative to the original dimensions
+                object.scale.set(
+                    boxParams.width / baseDims.w,
+                    boxParams.height / baseDims.h,
+                    boxParams.depth / baseDims.d
+                );
+                object.updateMatrixWorld(true);
+            } else {
+                // rebuild geometry to exact dimensions
+                const newGeo = new THREE.BoxGeometry(boxParams.width, boxParams.height, boxParams.depth);
+                object.geometry.dispose();
+                object.geometry = newGeo;
+                object.scale.set(1, 1, 1); // ensure no leftover scale
+            }
+
+            // keep the helper aligned with the current object bounds
+            box.update();
+            rebuildStrips();
+
+        }
+
+        //====================box resize functions end====================
+
+        function init() {
+
+            camera = new THREE.PerspectiveCamera(33, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.z = 10;
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(params.bg);
+
+            //renderer = new SVGRenderer();
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // controls
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.listenToKeyEvents(window); // optional
+
+            //controls.addEventListener( 'change', render ); // call this only in static scenes (i.e., if there is no animation loop)
+
+            controls.enableDamping = true; // an animation loop is required when either damping or auto-rotation are enabled
+            controls.dampingFactor = 0.05;
+
+            controls.screenSpacePanning = false;
+
+            //box
+            cube = new THREE.BoxGeometry(baseDims.w, baseDims.h, baseDims.d);
+            object = new THREE.Mesh(cube, new THREE.MeshBasicMaterial({ color: 0xff0000 }));
+            //scene.add(object);                 
+
+            box = new THREE.BoxHelper(object, params.cStroke);
+            box.matrixAutoUpdate = true;
+            scene.add(box);
+
+
+            rebuildStrips();
+
+            window.addEventListener('resize', onWindowResize);
+
+        }
+
+        //====================camera functions end====================
+
+        // keep your existing perspective camera as the "master"
+        const perspCamera = camera;
+
+        // make an ortho camera that matches what the perspective camera sees at the controls target
+        function makeMatchingOrtho(pcam) {
+            const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
+            const d = pcam.position.distanceTo(controls.target);
+            const halfH = Math.tan(THREE.MathUtils.degToRad(pcam.fov * 0.5)) * d;
+            const halfW = halfH * aspect;
+            const ocam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, pcam.near, pcam.far);
+            ocam.position.copy(pcam.position);
+            ocam.quaternion.copy(pcam.quaternion);
+            ocam.updateProjectionMatrix();
+            return ocam;
+        }
+
+        const orthoCamera = makeMatchingOrtho(perspCamera);
+
+        // keep the ortho frustum in sync with current perspective settings/pose
+        function syncOrthoFrustum() {
+            const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
+            const d = perspCamera.position.distanceTo(controls.target);
+            const halfH = Math.tan(THREE.MathUtils.degToRad(perspCamera.fov * 0.5)) * d;
+            const halfW = halfH * aspect;
+            orthoCamera.left = -halfW;
+            orthoCamera.right = halfW;
+            orthoCamera.top = halfH;
+            orthoCamera.bottom = -halfH;
+            // align pose when switching back/forth
+            if (camera === perspCamera) {
+                orthoCamera.position.copy(perspCamera.position);
+                orthoCamera.quaternion.copy(perspCamera.quaternion);
+            }
+            orthoCamera.near = perspCamera.near;
+            orthoCamera.far = perspCamera.far;
+            orthoCamera.updateProjectionMatrix();
+        }
+
+        // update when orbiting/zooming
+        controls.addEventListener('change', () => {
+            if (camera === perspCamera) {
+                syncOrthoFrustum();
+            } else {
+                // keep persp pose following ortho so switching back is seamless
+                perspCamera.position.copy(orthoCamera.position);
+                perspCamera.quaternion.copy(orthoCamera.quaternion);
+                syncOrthoFrustum();
+            }
+        });
+
+        // update on resize
+        window.addEventListener('resize', () => {
+            const w = window.innerWidth, h = window.innerHeight;
+            renderer.setSize(w, h);
+            perspCamera.aspect = w / h;
+            perspCamera.updateProjectionMatrix();
+            syncOrthoFrustum();
+        });
+
+        //====================camera functions end====================
+
+        //====================render functions start====================
+
+        let currentRenderer = 'WebGL (Video Output)'; // or 'SVG'
+
+        function createRenderer(kind) {
+            if (kind === 'SVG (SVG Output)') {
+                const r = new SVGRenderer();
+                r.setSize(window.innerWidth, window.innerHeight);
+                return r;
+            } else {
+                const r = new THREE.WebGLRenderer({ antialias: true });
+                r.setPixelRatio(window.devicePixelRatio);
+                r.setSize(window.innerWidth, window.innerHeight);
+                return r;
+            }
+        }
+
+        function recreateControls() {
+            // stash previous options (if you care to preserve them)
+            const opts = {
+                enableDamping: controls?.enableDamping ?? true,
+                dampingFactor: controls?.dampingFactor ?? 0.05,
+                screenSpacePanning: controls?.screenSpacePanning ?? false,
+                target: controls?.target?.clone() ?? new THREE.Vector3()
+            };
+            controls?.dispose();
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.listenToKeyEvents(window);
+            controls.enableDamping = opts.enableDamping;
+            controls.dampingFactor = opts.dampingFactor;
+            controls.screenSpacePanning = opts.screenSpacePanning;
+            controls.target.copy(opts.target);
+            controls.update();
+        }
+
+        function switchRenderer(kind) {
+            if (kind === currentRenderer) return;
+
+            // remove old canvas/svg
+            if (renderer) {
+                renderer.domElement?.parentNode?.removeChild(renderer.domElement);
+                // WebGLRenderer has dispose; SVGRenderer does not
+                if (renderer.dispose) renderer.dispose();
+            }
+
+            renderer = createRenderer(kind);
+            container.appendChild(renderer.domElement);
+            recreateControls();
+
+            currentRenderer = kind;
+        }
+
+        //====================render functions end====================
+
+        //====================export functions start====================
+        function saveCurrentSVG(target = 'svg', filename = 'scene.svg', includeBG = true) {
+            const svgEl = typeof target === 'string' ? document.querySelector(target) : target;
+            if (!svgEl) { console.warn('SVG not found'); return; }
+
+            // Clone so we can tweak attributes safely
+            const svg = svgEl.cloneNode(true);
+            const ns = 'http://www.w3.org/2000/svg';
+            svg.setAttribute('xmlns', ns);
+            if (!svg.getAttribute('xmlns:xlink')) svg.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+
+            // Ensure width/height + viewBox are present
+            let w = parseFloat(svg.getAttribute('width'));
+            let h = parseFloat(svg.getAttribute('height'));
+            if (!w || !h) {
+                const r = svgEl.getBoundingClientRect();
+                w = Math.max(1, Math.round(r.width));
+                h = Math.max(1, Math.round(r.height));
+                svg.setAttribute('width', w);
+                svg.setAttribute('height', h);
+            }
+            //if (!svg.getAttribute('viewBox')) svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+            // Optional solid background
+            if (includeBG) {
+                const bgColor = getComputedStyle(document.body).backgroundColor || '#000'; // or your scene bg
+                const rect = document.createElementNS(ns, 'rect');
+                rect.setAttribute('x', -String(w)) / 2; rect.setAttribute('y', -String(h) / 2);
+                rect.setAttribute('width', String(w));
+                rect.setAttribute('height', String(h));
+                rect.setAttribute('fill', bgColor);
+                svg.insertBefore(rect, svg.firstChild);
+            }
+
+            // Serialize & download
+            const xml = new XMLSerializer().serializeToString(svg);
+            const data = `<?xml version="1.0" encoding="UTF-8"?>\n${xml}`;
+            const blob = new Blob([data], { type: 'image/svg+xml;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        //====================export functions end====================
+
+
+
+        //====================GUI functions start====================
+
+        function addLabel(folder, text) {
+            const o = { _label: '' };
+            const ctrl = folder.add(o, '_label').name(text).disable();
+
+            // make it look like a header/divider
+            const el = ctrl.domElement;
+            const input = el.querySelector('input');
+            if (input) input.style.display = 'none';     // hide the text field
+            el.style.pointerEvents = 'none';             // not clickable
+            el.style.borderTop = '1px solid rgba(255,255,255,0.12)';
+            el.style.marginTop = '6px';
+            el.style.paddingTop = '6px';
+            el.style.opacity = '0.85';
+            return ctrl;
+        }
+        const gui = new GUI({ closeFolders: true });
+
+        const viewUI = { Renderer: 'WebGL (Video Output)' };
+        gui.add(viewUI, 'Renderer', ['WebGL (Video Output)', 'SVG (SVG Output)'])
+            .name('Renderer')
+            .onChange((mode) => switchRenderer(mode));
+
+
+        const camUI = { Projection: 'Perspective' };
+        gui.add(camUI, 'Projection', ['Perspective', 'Orthographic'])
+            .name('Camera')
+            .onChange(mode => {
+                if (mode === 'Perspective') {
+                    // align persp to ortho pose before switching back
+                    perspCamera.position.copy(orthoCamera.position);
+                    perspCamera.quaternion.copy(orthoCamera.quaternion);
+                    camera = perspCamera;
+                } else {
+                    syncOrthoFrustum();
+                    camera = orthoCamera;
+                }
+                controls.object = camera;
+                controls.update();
+            });
+
+        gui.add({ kStroke }, 'kStroke', 0.001, 1, 0.001).name('K Stroke Width').onChange((val) => {
+            kStroke = val;
+            rebuildStrips();
+        });
+
+        const ui = { showBoxHelper: true }; // default on
+        gui.add(ui, 'showBoxHelper').name('Box Helper').onChange((v) => {
+            if (box) box.visible = v;
+        });
+
+        const colFolder = gui.addFolder('Color');
+
+        colFolder.addColor(params, 'bg').name('Background').onChange((v) => {
+            // if background already exists, just set it; otherwise create it
+            if (scene.background && scene.background.isColor) {
+                scene.background.set(v);
+            } else {
+                scene.background = new THREE.Color(v);
+            }
+        });
+        colFolder.addColor(params, 'cStroke').name('Stroke Color').onChange((v) => {
+            setStrokeColor(v);
+            if (box && box.material && box.material.color) {
+                box.material.color.set(v);
+                box.material.needsUpdate = true; // not required, but safe
+            }
+        });
+        colFolder.open(false);
+
+        const staticFolder = gui.addFolder('Static');
+        addLabel(staticFolder, 'Box Size');
+
+        const boxParams = {
+            mode: 'Scale',       // 'Scale' or 'Rebuild'
+            width: baseDims.w,
+            height: baseDims.h,
+            depth: baseDims.d
+        };
+
+        staticFolder.add(boxParams, 'mode', ['Scale', 'Rebuild']).name('Resize via').onChange(applyBoxSize);
+        staticFolder.add(boxParams, 'width', 1, 10, 0.01).onChange(applyBoxSize);
+        staticFolder.add(boxParams, 'height', 1, 10, 0.01).onChange(applyBoxSize);
+        staticFolder.add(boxParams, 'depth', 1, 10, 0.01).onChange(applyBoxSize);
+        staticFolder.open(false);
+
+// --- GUI: Static rotation (degrees) ---
+addLabel(staticFolder, 'Rotation');
+
+const staticRot = { x: 0, y: 0, z: 0 };   // degrees
+const rotStep   = { step: 0.1 };          // <— make 0.1 user-adjustable
+
+// create controllers first
+const xCtrl = staticFolder.add(staticRot, 'x', -180, 180).name('X (°)').onChange(applyStaticRotation);
+const yCtrl = staticFolder.add(staticRot, 'y', -180, 180).name('Y (°)').onChange(applyStaticRotation);
+const zCtrl = staticFolder.add(staticRot, 'z', -180, 180).name('Z (°)').onChange(applyStaticRotation);
+
+// set initial step
+[xCtrl, yCtrl, zCtrl].forEach(c => c.step(rotStep.step));
+
+// step size control
+staticFolder.add(rotStep, 'step', 0.01, 45, 0.01).name('Step (°)').onChange((s) => {
+  [xCtrl, yCtrl, zCtrl].forEach(c => c.step(s));
+});
+
+// optional reset
+staticFolder.add({ reset: () => { staticRot.x = staticRot.y = staticRot.z = 0; applyStaticRotation(); } }, 'reset').name('Reset');
+
+// apply only when rotation animation is OFF
+function applyStaticRotation() {
+  if (rotateEnabled) return;
+  const rx = THREE.MathUtils.degToRad(staticRot.x);
+  const ry = THREE.MathUtils.degToRad(staticRot.y);
+  const rz = THREE.MathUtils.degToRad(staticRot.z);
+  scene.traverse((child) => {
+    if (child.parent !== scene) return;
+    child.rotation.set(rx, ry, rz);
+  });
+}
+
+
+        // ---- GUI: Animation staticFolder (toggle) ----
+
+        const animFolder = gui.addFolder('Animation');
+
+        const rotateUI = { enabled: false, period: 6 }; // default: 8s per turn
+        animFolder.add(rotateUI, 'enabled').name('Rotation').onChange(v => { rotateEnabled = v; });
+        animFolder.add(rotateUI, 'period', 0.1, 60, 0.01).name('Rotation Cycle (s)');
+
+        addLabel(animFolder, 'Stroke');
+        let strokePlayhead = 0;
+        let strokeCycleTime = 0;
+
+        const strokeUI = {
+            auto: false,                // enable/disable automatic animation
+            min: 0.05,                  // minimum stroke width
+            max: 0.2,                   // maximum stroke width
+            period: 2.0,                 // seconds for a full min→max→min cycle
+            delayPause: 3
+        };
+
+        // --- GUI (put under the existing Animation folder if you have it) ---
+        animFolder.add(strokeUI, 'auto').name('Stroke Animation');
+        animFolder.add(strokeUI, 'min', 0.001, 1, 0.001).name('Stroke Min').onChange(() => {
+            if (strokeUI.min > strokeUI.max) [strokeUI.min, strokeUI.max] = [strokeUI.max, strokeUI.min];
+        });
+        animFolder.add(strokeUI, 'max', 0.001, 1, 0.001).name('Stroke Max').onChange(() => {
+            if (strokeUI.min > strokeUI.max) [strokeUI.min, strokeUI.max] = [strokeUI.max, strokeUI.min];
+        });
+        animFolder.add(strokeUI, 'period', 0.1, 20, 0.01).name('Stroke Cycle (s)').onChange(() => strokeCycleTime = 0);
+        animFolder.add(strokeUI, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)').onChange(() => strokeCycleTime = 0);
+
+        // --- helper to set stroke once (used by auto + manual) ---
+        function setStroke(w) {
+            kStroke = w;
+            rebuildStrips();
+        }
+
+        // --- auto box width state ---
+        addLabel(animFolder, 'Box Width');
+        let boxWidthPlayhead = 0;
+        let widthCycleTime = 0;
+        const boxWidthUI = {
+            auto: false,
+            min: 2,   // start from current width
+            max: 6, // tweak in GUI
+            period: 3.0,          // seconds for width min→max→min
+            delayPause: 3
+        };
+
+        // --- GUI (put with your other animation controls) ---
+        const widthAutoCtrl = animFolder.add(boxWidthUI, 'auto').name('Box Width Animation').onChange(() => {
+            widthCycleTime = 0;
+        });
+        animFolder.add(boxWidthUI, 'min', 1, 6, 0.01).name('Width Min').onChange(() => {
+            if (boxWidthUI.min > boxWidthUI.max) [boxWidthUI.min, boxWidthUI.max] = [boxWidthUI.max, boxWidthUI.min];
+        });
+        animFolder.add(boxWidthUI, 'max', 1, 6, 0.01).name('Width Max').onChange(() => {
+            if (boxWidthUI.min > boxWidthUI.max) [boxWidthUI.min, boxWidthUI.max] = [boxWidthUI.max, boxWidthUI.min];
+        });
+        animFolder.add(boxWidthUI, 'period', 0.1, 20, 0.01).name('Width Cycle (s)');
+        animFolder.add(boxWidthUI, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)').onChange(() => strokeCycleTime = 0);
+
+        // helper -> route to your existing size logic
+        function setBoxWidth(w) {
+            boxParams.width = w;
+            applyBoxSize();      // must update object (scale or rebuild), box.update(), and rebuildStrips()
+        }
+
+        // --- auto box HEIGHT state ---
+        addLabel(animFolder, 'Box Height');
+
+        let boxHeightPlayhead = 0;
+        let heightCycleTime = 0;
+        let heightDelayLeft = 3;
+
+        const boxHeightUI = {
+            auto: false,
+            min: 2,        // start from current height
+            max: 6,        // tweak in GUI
+            period: 3.0,   // seconds for height min→max→min
+            delayStart: 0,
+            delayPause: 3
+        };
+
+        // --- GUI ---
+        const heightAutoCtrl = animFolder.add(boxHeightUI, 'auto').name('Box Height Animation');
+
+        animFolder.add(boxHeightUI, 'min', 1, 6, 0.01).name('Height Min').onChange(() => {
+            if (boxHeightUI.min > boxHeightUI.max) [boxHeightUI.min, boxHeightUI.max] = [boxHeightUI.max, boxHeightUI.min];
+        });
+        animFolder.add(boxHeightUI, 'max', 1, 6, 0.01).name('Height Max').onChange(() => {
+            if (boxHeightUI.min > boxHeightUI.max) [boxHeightUI.min, boxHeightUI.max] = [boxHeightUI.max, boxHeightUI.min];
+        });
+        animFolder.add(boxHeightUI, 'period', 0.1, 20, 0.01).name('Height Cycle (s)')
+            .onChange(() => { heightCycleTime = 0; });
+
+        animFolder.add(boxHeightUI, 'delayStart', 0, 10, 0.01).name('Start Delay (s)')
+            .onChange(() => {
+                heightDelayLeft = boxHeightUI.delayStart;
+                console.log('Height start delay set to:', boxHeightUI.delayStart);
+                heightCycleTime = 0;
+            }).hide();
+
+        animFolder.add(boxHeightUI, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)')
+            .onChange(() => { heightCycleTime = 0; });
+
+        const animActions = {
+            startAnimation() {
+                resetAllRotations(0);
+                // Commit any active GUI text inputs
+                if (document.activeElement && document.activeElement.blur) {
+                    document.activeElement.blur();
+                }
+
+                // --- Rotation ---
+                // Use current toggle from GUI; reset phase if enabled
+                rotateEnabled = !!rotateUI.enabled;
+                if (rotateEnabled) playhead = 0;
+
+                // --- Width animation ---
+                // Do NOT force-enable; use current boxWidthUI.auto from GUI
+                if (boxWidthUI.auto) {
+                    widthCycleTime = 0;
+                    if (typeof boxWidthPlayhead !== 'undefined') boxWidthPlayhead = 0; // if you still use it
+                    // optional: snap to min at start of first cycle
+                    // setBoxWidth(boxWidthUI.min);
+                }
+
+                // --- Height animation ---
+                if (boxHeightUI.auto) {
+                    heightCycleTime = 0;
+                    if (typeof boxHeightPlayhead !== 'undefined') boxHeightPlayhead = 0;
+                    // one-time start delay at beginning (if you have delayStart)
+                    if ('delayStart' in boxHeightUI) {
+                        heightDelayLeft = boxHeightUI.delayStart;
+                    } else if ('delayPause' in boxHeightUI) {
+                        // if you only use pause-after-cycle, start immediately
+                        heightDelayLeft = 0;
+                    }
+                    // optional: snap to min at start
+                    // setBoxHeight(boxHeightUI.min);
+                }
+
+                // Ensure the box reflects current size params immediately
+                // (only needed if you allow manual width/height sliders too)
+                applyBoxSize();
+
+                // OPTIONAL: refresh GUI checkboxes if you programmatically changed them
+                if (typeof widthAutoCtrl !== 'undefined') widthAutoCtrl.updateDisplay();
+                if (typeof heightAutoCtrl !== 'undefined') heightAutoCtrl.updateDisplay();
+                // If you have a rotation checkbox controller, refresh it too.
+                if (typeof rotateCtrl !== 'undefined') rotateCtrl.updateDisplay();
+
+                // OPTIONAL: if you wired up recording
+                // if (recUI.record && renderer instanceof THREE.WebGLRenderer) {
+                //   startCanvasRecording(renderer, {
+                //     seconds:  recUI.seconds,
+                //     fps:      recUI.fps,
+                //     filename: recUI.filename
+                //   });
+                // }
+            }
+        };
+
+        // Add the button:
+        animFolder.add(animActions, 'startAnimation').name('Start Animation');
+
+
+        // helper -> route to your existing size logic
+        function setBoxHeight(h) {
+            boxParams.height = h;
+            applyBoxSize();    // must update object, box.update(), and rebuildStrips()
+        }
+
+
+        const expoFolder = gui.addFolder('Export');
+
+        const exportUI = {
+            filename: 'scene.svg',
+            background: true,
+            save: () => saveCurrentSVG(renderer.domElement, exportUI.filename, exportUI.background),
+        };
+
+        addLabel(expoFolder, 'SVG');
+
+        expoFolder.add(exportUI, 'filename').name('SVG Filename');
+        expoFolder.add(exportUI, 'background').name('SVG Background');
+        expoFolder.add(exportUI, 'save').name('Save SVG');
+
+        // --- Recording UI/state ---
+        const recUI = {
+            seconds: 6.0,
+            fps: 60,
+            filename: 'capture.webm'
+        };
+
+        addLabel(expoFolder, 'Video (preview with Start Animation first)');
+
+        // Add to your existing Animation GUI (checkbox + options)
+        expoFolder.add(recUI, 'seconds', 0.5, 30, 0.1).name('Record Seconds');
+        expoFolder.add(recUI, 'fps', 1, 60, 1).name('Record FPS');
+        // optional: filename edit
+        expoFolder.add(recUI, 'filename').name('Record Filename');
+
+        // ----- Canvas recording helper (WebGL only) -----
+        async function startCanvasRecording(renderer, { seconds = 2, fps = 60, filename = 'capture.webm' } = {}) {
+            // Must be a WebGL canvas (SVGRenderer won't work with captureStream)
+            if (!(renderer instanceof THREE.WebGLRenderer)) {
+                console.warn('Recording requires WebGLRenderer.');
+                return;
+            }
+            const canvas = renderer.domElement;
+            if (!canvas.captureStream) {
+                console.warn('captureStream() not supported by this browser.');
+                return;
+            }
+
+            const stream = canvas.captureStream(fps);
+
+            // Pick the best supported MIME type
+            const pickType = (...types) => types.find(t => MediaRecorder.isTypeSupported(t));
+            const mimeType =
+                pickType('video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm') ||
+                (navigator.userAgent.includes('Safari') ? 'video/mp4' : '');
+
+            let recorder;
+            try {
+                recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+            } catch (e) {
+                console.warn('Failed to create MediaRecorder:', e);
+                return;
+            }
+
+            const chunks = [];
+            recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+
+            const stopped = new Promise(resolve => (recorder.onstop = resolve));
+
+            recorder.start(); // start capturing
+            setTimeout(() => { try { recorder.stop(); } catch (_) { } }, (seconds + 0.15) * 1000);
+
+            await stopped;
+
+            const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        const recordActions = {
+            startRecord() {
+                // enable both animations
+                boxWidthUI.auto = true;
+                boxHeightUI.auto = true;
+                widthCycleTime = 0;
+                heightCycleTime = 0;
+                if (typeof boxWidthPlayhead !== 'undefined') boxWidthPlayhead = 0;
+                if (typeof boxHeightPlayhead !== 'undefined') boxHeightPlayhead = 0;
+
+                // refresh the GUI checkboxes
+                widthAutoCtrl.updateDisplay();
+                heightAutoCtrl.updateDisplay();
+
+                startCanvasRecording(renderer, {
+                    seconds: recUI.seconds,
+                    fps: recUI.fps,
+                    filename: recUI.filename
+                });
+
+            }
+        };
+
+        expoFolder.add(recordActions, 'startRecord').name('Start Record');
+
+        //====================gui functions end====================
+
+        function onWindowResize() {
+
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+        }
+
+        let playhead = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const dt = clock.getDelta();
+
+            if (strokeUI.auto && strokeUI.period > 1e-4) {
+                const cycle = strokeUI.delayPause + strokeUI.period;        // full cycle length
+                strokeCycleTime = (strokeCycleTime + dt) % cycle;           // wrap within cycle
+                if (strokeCycleTime < strokeUI.delayPause) {
+                    // delay segment this cycle → hold at min
+                    setStroke(strokeUI.min);
+                } else {
+                    // animated segment
+                    const u = (strokeCycleTime - strokeUI.delayPause) / strokeUI.period; // 0..1
+                    // smooth ping-pong 0→1→0 over u∈[0,1]
+                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));
+                    setStroke(THREE.MathUtils.lerp(strokeUI.min, strokeUI.max, t));
+                }
+            }
+
+            if (boxWidthUI.auto && boxWidthUI.period > 1e-4) {
+                const cycle = boxWidthUI.period + boxWidthUI.delayPause;   // motion first, then pause
+                widthCycleTime = (widthCycleTime + dt) % cycle;
+
+                if (widthCycleTime < boxWidthUI.period) {
+                    // Animated segment (0..period)
+                    const u = widthCycleTime / boxWidthUI.period;           // 0..1
+                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));        // ping–pong 0..1..0
+                    const w = THREE.MathUtils.lerp(boxWidthUI.min, boxWidthUI.max, t);
+                    if (Math.abs(w - boxParams.width) > 1e-6) setBoxWidth(w);
+                } else {
+                    // Pause segment (after each full cycle)
+                    // Option A: hold at min (ping–pong ends at min anyway)
+                    const w = boxWidthUI.min;
+                    if (Math.abs(w - boxParams.width) > 1e-6) setBoxWidth(w);
+
+                    // Option B (do nothing): comment out the two lines above if you want no changes during pause
+                }
+            }
+
+
+            if (boxHeightUI.auto && boxHeightUI.period > 1e-4) {
+
+                heightDelayLeft = Math.max(0, heightDelayLeft - dt);
+
+                if (heightDelayLeft > 0) return;
+
+                const cycle = boxHeightUI.delayPause + boxHeightUI.period;   // delay + motion
+                heightCycleTime = (heightCycleTime + dt) % cycle;
+
+                if (heightCycleTime < boxHeightUI.delayPause) {
+                    // during delay: hold at min (or do nothing if you prefer)
+                    const h = boxHeightUI.min;
+                    if (Math.abs(h - boxParams.height) > 1e-6) setBoxHeight(h);
+                } else {
+                    const u = (heightCycleTime - boxHeightUI.delayPause) / boxHeightUI.period; // 0..1
+                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u)); // smooth 0..1..0
+                    const h = THREE.MathUtils.lerp(boxHeightUI.min, boxHeightUI.max, t);
+                    if (Math.abs(h - boxParams.height) > 1e-6) setBoxHeight(h);
+                }
+
+            }
+
+            if (rotateEnabled) {
+                playhead += dt;
+
+                const TWO_PI = Math.PI * 2;
+                const omega = (rotateUI.period > 1e-4) ? (TWO_PI / rotateUI.period) : 0;
+
+                let i = 0;
+                scene.traverse((child) => {
+                    if (child.parent !== scene) return; // top-level only
+                    child.rotation.y = i + playhead * omega;
+                });
+            }
+            // else: leave current rotations untouched
+
+
+            controls.update(); // needed if enableDamping = true
+            render();
+        }
+
+        function resetAllRotations(angle = 0) {
+            let i = 0;
+            scene.traverse((child) => {
+                if (child.parent !== scene) return;
+                child.rotation.set(0, angle, 0);
+                i++;
+            });
+            playhead = 0; // optional: reset phase so next start begins clean
+        }
+
+        function render() {
+
+            renderer.render(scene, camera);
+
+        }
+
+        animate();
+
+
+        
+    </script>
+</body>
+
+</html>

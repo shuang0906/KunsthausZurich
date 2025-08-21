@@ -2,34 +2,12 @@
 <html lang="en">
 
 <head>
-    <title>Kunsthaus Zurich Logo Generator</title>
+    <title>three.js svg - lines</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
     <style>
         svg {
             display: block;
-        }
-
-        .lil-gui {
-            --background-color: #ffffff;
-            --text-color: rgb(0, 0, 0);
-            --widget-color: rgb(0, 0, 0);
-            --number-color: #ffffff;
-            --padding: 2px;
-
-        }
-
-        .lil-gui .title:hover {
-            --title-background-color: rgb(105, 105, 105);
-        }
-
-        .lil-gui .controller.disabled {
-            font-weight: 600;
-        }
-
-        .widget{
---text-color: rgb(255, 255, 255);
-color: #ffffff;
         }
     </style>
 </head>
@@ -59,8 +37,6 @@ color: #ffffff;
         let camera, controls, scene, renderer;
         let cube, object, box;
         let strip1, strip2, strip3;
-        let kGroup;
-
 
         const container = document.body;
 
@@ -73,7 +49,7 @@ color: #ffffff;
 
         const params = {
             bg: '#000000', // initial color
-            cStroke: '#ffffff',
+            cStroke: '#66ccff',
         };
 
         // any material that should follow cStroke goes here
@@ -117,6 +93,7 @@ color: #ffffff;
         }
 
         // Quad builder with UVs
+
         function makeQuad(p0, p1, p2, p3, material) {
             const g = new THREE.BufferGeometry();
             g.setAttribute(
@@ -159,43 +136,35 @@ color: #ffffff;
         }
 
         // Remove old strips safely
-        function ensureKGroup() {
-            if (!kGroup) {
-                kGroup = new THREE.Group();
-                scene.add(kGroup);              // kGroup is a top-level node the animator rotates
-            }
-        }
-
-        // clear children but keep kGroup (so its rotation is preserved)
         function clearStrips() {
-            if (!kGroup) return;
-            for (let i = kGroup.children.length - 1; i >= 0; i--) {
-                const m = kGroup.children[i];
-                kGroup.remove(m);
-                m.geometry?.dispose();
-                // m.material?.dispose(); // only dispose if you don't reuse matWhiteDS
-            }
+            [strip1, strip2, strip3].forEach((m) => {
+                if (!m) return;
+                scene.remove(m);
+                m.geometry.dispose();
+                // m.material.dispose(); // only if not reusing matWhiteDS
+            });
+            strip1 = strip2 = strip3 = undefined;
         }
 
+        // Recompute vertices from the current box and rebuild the 3 strips
         function rebuildStrips() {
             if (!cube || !object) return;
 
-            ensureKGroup();
+            object.updateMatrixWorld(true);   // important after any resize/scale
+            box.update();
 
-            object.updateMatrixWorld(true);
-            box.update(); // BoxHelper stays as-is; we don't recreate it
-
-            // --- define all the points explicitly ---
             // line 1 (5 -> 7)
             const vStart1 = worldVertex(cube, 5, object);
             const vEnd1 = worldVertex(cube, 7, object);
             const xOffset = new THREE.Vector3(kStroke, 0, 0);
 
-            // line 2 (index 1 -> midpoint of line 1)
+            // line 2 (your order: index 1 -> midpoint of line1)
             const vStart2 = worldVertex(cube, 1, object);
             const vEnd2 = vStart1.clone().add(vEnd1).multiplyScalar(0.5);
             const t = 0.1;
+
             const vStart3 = vEnd2.clone().lerp(vStart2, t);
+            //const vStart3 = vEnd2.clone().lerp(vStart2, t).sub(new THREE.Vector3(0, kStroke, 0));
 
             // line 3 (vStart3 -> index 2)
             const v2 = worldVertex(cube, 2, object);
@@ -204,27 +173,22 @@ color: #ffffff;
             const yOffsetNeg = new THREE.Vector3(0, -kStroke, 0);
             const yOffsetPos = new THREE.Vector3(0, kStroke, 0);
 
-            // --- rebuild the three strips inside kGroup ---
             clearStrips();
 
-            let s1 = makeStrip(vStart1, vEnd1, xOffset, matWhiteDS.clone());
-            let s2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS.clone());
-            let s3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS.clone());
+            strip1 = makeStrip(vStart1, vEnd1, xOffset, matWhiteDS);
+            strip2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS);
+            //strip3 = makeStrip(v2, vStart3, yOffsetPos, matWhiteDS);
+            strip3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS);
+            addOutline(strip1);
+            addOutline(strip2);
+            addOutline(strip3);
 
-            addOutline(s1);
-            addOutline(s2);
-            addOutline(s3);
+            scene.add(strip1, strip2, strip3);
 
-            // per-strip depth tweaks
-            s1.material.depthWrite = false;
-            s2.material.depthWrite = false;
-            s1.renderOrder = 0;
-            s2.renderOrder = 1;
-
-            kGroup.add(s1, s2, s3);
-
-            // keep references if you use them elsewhere
-            strip1 = s1; strip2 = s2; strip3 = s3;
+            strip2.material.depthWrite = false;
+            strip1.material.depthWrite = false;
+            strip1.renderOrder = 0;
+            strip2.renderOrder = 1;
         }
 
         function addOutline(strip, alwaysOnTop = true) {
@@ -279,10 +243,11 @@ color: #ffffff;
             camera.position.z = 10;
 
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(params.bg);
+            scene.background = null;
 
             //renderer = new SVGRenderer();
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setClearColor(0x000000, 0);
             renderer.setPixelRatio(window.devicePixelRatio);
 
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -497,13 +462,13 @@ color: #ffffff;
             const input = el.querySelector('input');
             if (input) input.style.display = 'none';     // hide the text field
             el.style.pointerEvents = 'none';             // not clickable
-            el.style.borderTop = '1px solid rgba(0,0,0,1)';
-            el.style.marginTop = '-1px';
-            el.style.paddingTop = '0px';
+            el.style.borderTop = '1px solid rgba(255,255,255,0.12)';
+            el.style.marginTop = '6px';
+            el.style.paddingTop = '6px';
             el.style.opacity = '0.85';
             return ctrl;
         }
-        const gui = new GUI({ closeFolders: true }, { injectStyles: false });
+        const gui = new GUI({ closeFolders: true });
 
         const viewUI = { Renderer: 'WebGL (Video Output)' };
         gui.add(viewUI, 'Renderer', ['WebGL (Video Output)', 'SVG (SVG Output)'])
@@ -998,6 +963,200 @@ color: #ffffff;
         }
 
         animate();
+
+
+        // --- one-time CSS to ensure full-viewport body & centered background ---
+        (function ensureBgCSS() {
+            if (document.getElementById('bg-css')) return;
+            const style = document.createElement('style');
+            style.id = 'bg-css';
+            style.textContent = `
+    html, body { height: 100%; margin: 0; }
+    body {
+      width: 100vw; min-height: 100vh;
+      background-repeat: no-repeat;
+      background-position: center center;
+      background-size: auto 80vh; /* height = 80vh, width auto */
+    }
+  `;
+            document.head.appendChild(style);
+        })();
+
+        // --- hidden file input (image only) ---
+        let bgObjectURL = null;
+        const bgInput = document.createElement('input');
+        bgInput.type = 'file';
+        bgInput.accept = 'image/*';
+        bgInput.style.display = 'none';
+        document.body.appendChild(bgInput);
+
+        bgInput.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+
+            // revoke previous URL to avoid leaks
+            if (bgObjectURL) {
+                URL.revokeObjectURL(bgObjectURL);
+                bgObjectURL = null;
+            }
+            bgObjectURL = URL.createObjectURL(file);
+
+            // apply as body background
+            document.body.style.backgroundImage = `url("${bgObjectURL}")`;
+            // (size/position/repeat are handled by CSS above)
+        });
+
+        // --- GUI buttons ---
+        const bgUI = {
+            uploadBackground() { bgInput.click(); },
+            clearBackground() {
+                if (bgObjectURL) { URL.revokeObjectURL(bgObjectURL); bgObjectURL = null; }
+                document.body.style.backgroundImage = 'none';
+            }
+        };
+
+        // Put these wherever you like (e.g., staticFolder or a new "Background" section)
+        addLabel(staticFolder, 'Background Image');
+        staticFolder.add(bgUI, 'uploadBackground').name('Upload Background');
+        staticFolder.add(bgUI, 'clearBackground').name('Clear Background');
+
+
+
+
+
+
+
+        // --- get image aspect from an input file or existing ObjectURL ---
+
+
+
+        // --- get box object-space dims (w,h) with current scale (no rotation) ---
+// --- helpers ---
+// ---------- helpers ----------
+// helpers (same as before)
+function getBoxDimsXYZ(mesh) {
+  const g = mesh.geometry;
+  if (!g.boundingBox) g.computeBoundingBox();
+  const size = new THREE.Vector3().subVectors(g.boundingBox.max, g.boundingBox.min);
+  return { w: size.x * mesh.scale.x, h: size.y * mesh.scale.y, d: size.z * mesh.scale.z };
+}
+function extractAxes(obj) {
+  const rot = new THREE.Matrix4().extractRotation(obj.matrixWorld);
+  const ux = new THREE.Vector3(1,0,0).applyMatrix4(rot).normalize();
+  const vy = new THREE.Vector3(0,1,0).applyMatrix4(rot).normalize();
+  const nz = new THREE.Vector3(0,0,1).applyMatrix4(rot).normalize();
+  return { ux, vy, nz };
+}
+function extractCamAxes(cam) {
+  const rot = new THREE.Matrix4().extractRotation(cam.matrixWorld);
+  const right = new THREE.Vector3(1,0,0).applyMatrix4(rot).normalize();
+  const up    = new THREE.Vector3(0,1,0).applyMatrix4(rot).normalize();
+  return { right, up };
+}
+// width-only solve: (ax*w + bx*h + cx*d) / (ay*w + by*h + cy*d) = R
+function solveForWidth(R, ax, bx, cx, ay, by, cy, h, d) {
+  const constX = bx*h + cx*d;
+  const constY = by*h + cy*d;
+  const denom  = ax - R*ay;
+  const numer  = R*constY - constX;
+  return Math.abs(denom) < 1e-9 ? null : numer / denom;
+}
+
+/** Random-rotate (XYZ) then adjust ONLY width to match target aspect. */
+function matchBoxToAspectRandomWidthOnly(targetAspect) {
+  if (!camera.isOrthographicCamera) {
+    console.warn('Width-only aspect match assumes an orthographic camera.');
+  }
+
+  // 1) random static rotation (deg) & apply
+  rotateEnabled = false;
+  const randDeg = () => (Math.random() * 360 - 180);
+  staticRot.x = randDeg();
+  staticRot.y = randDeg();
+  staticRot.z = randDeg();
+  applyStaticRotation();
+
+  // 2) coefficients for current pose (ortho)
+  object.updateMatrixWorld(true);
+  camera.updateMatrixWorld(true);
+
+  const { h, d }    = getBoxDimsXYZ(object);      // keep these fixed
+  const { ux, vy, nz } = extractAxes(object);
+  const { right, up }  = extractCamAxes(camera);
+
+  const ax = Math.abs(ux.dot(right)), bx = Math.abs(vy.dot(right)), cx = Math.abs(nz.dot(right));
+  const ay = Math.abs(ux.dot(up)),    by = Math.abs(vy.dot(up)),    cy = Math.abs(nz.dot(up));
+
+  // 3) solve for new width
+  let newW = solveForWidth(targetAspect, ax, bx, cx, ay, by, cy, h, d);
+
+  // guardrails
+  if (!(newW > 1e-6)) {
+    console.warn('Aspect match (width-only): no valid solve for this orientation; leaving size unchanged.');
+    return;
+  }
+
+  // 4) apply width only (height/depth unchanged)
+  boxParams.width = newW;
+  applyBoxSize();        // your existing function (updates mesh, helper, strips)
+}
+
+
+
+        // ---------------------
+        // Example wiring with your GUI upload
+        // ---------------------
+// --- hidden file input (image only) ---
+const fileInput = document.createElement('input');
+fileInput.type = 'file';
+fileInput.accept = 'image/*';
+fileInput.style.display = 'none';
+document.body.appendChild(fileInput);
+
+// open picker from GUI
+const aspectActions = { matchFromImage: () => fileInput.click() };
+gui.add(aspectActions, 'matchFromImage').name('Match Box to Image Aspect');
+
+// read aspect ratio from an image file
+function getImageAspectFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const R = img.naturalWidth / img.naturalHeight;
+      URL.revokeObjectURL(url);
+      resolve(R);
+    };
+    img.onerror = (e) => {
+      URL.revokeObjectURL(url);
+      reject(e);
+    };
+    img.src = url;
+  });
+}
+
+// when user picks an image, random-rotate & size the box to match its aspect
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  try {
+    const R = await getImageAspectFromFile(file);
+
+    // this routine assumes an orthographic camera (as per your requirement)
+    if (!camera.isOrthographicCamera) {
+      console.warn('matchBoxToAspectRandom assumes an orthographic camera.');
+    }
+
+    // randomize rotation via applyStaticRotation() and size to match aspect
+    matchBoxToAspectRandomWidthOnly(R);
+  } catch (err) {
+    console.warn('Failed to read image aspect:', err);
+  } finally {
+    // let user pick the same file again later
+    e.target.value = '';
+  }
+});
 
 
 

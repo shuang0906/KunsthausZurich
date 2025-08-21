@@ -2,7 +2,7 @@
 <html lang="en">
 
 <head>
-    <title>three.js svg - lines</title>
+    <title>Kunsthaus Zurich Logo Generator</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
     <style>
@@ -37,6 +37,8 @@
         let camera, controls, scene, renderer;
         let cube, object, box;
         let strip1, strip2, strip3;
+        let kGroup;
+
 
         const container = document.body;
 
@@ -135,35 +137,43 @@
         }
 
         // Remove old strips safely
-        function clearStrips() {
-            [strip1, strip2, strip3].forEach((m) => {
-                if (!m) return;
-                scene.remove(m);
-                m.geometry.dispose();
-                // m.material.dispose(); // only if not reusing matWhiteDS
-            });
-            strip1 = strip2 = strip3 = undefined;
+        function ensureKGroup() {
+            if (!kGroup) {
+                kGroup = new THREE.Group();
+                scene.add(kGroup);              // kGroup is a top-level node the animator rotates
+            }
         }
 
-        // Recompute vertices from the current box and rebuild the 3 strips
+        // clear children but keep kGroup (so its rotation is preserved)
+        function clearStrips() {
+            if (!kGroup) return;
+            for (let i = kGroup.children.length - 1; i >= 0; i--) {
+                const m = kGroup.children[i];
+                kGroup.remove(m);
+                m.geometry?.dispose();
+                // m.material?.dispose(); // only dispose if you don't reuse matWhiteDS
+            }
+        }
+
         function rebuildStrips() {
             if (!cube || !object) return;
 
-            object.updateMatrixWorld(true);   // important after any resize/scale
-            box.update();
+            ensureKGroup();
 
+            object.updateMatrixWorld(true);
+            box.update(); // BoxHelper stays as-is; we don't recreate it
+
+            // --- define all the points explicitly ---
             // line 1 (5 -> 7)
             const vStart1 = worldVertex(cube, 5, object);
             const vEnd1 = worldVertex(cube, 7, object);
             const xOffset = new THREE.Vector3(kStroke, 0, 0);
 
-            // line 2 (your order: index 1 -> midpoint of line1)
+            // line 2 (index 1 -> midpoint of line 1)
             const vStart2 = worldVertex(cube, 1, object);
             const vEnd2 = vStart1.clone().add(vEnd1).multiplyScalar(0.5);
             const t = 0.1;
-
             const vStart3 = vEnd2.clone().lerp(vStart2, t);
-            //const vStart3 = vEnd2.clone().lerp(vStart2, t).sub(new THREE.Vector3(0, kStroke, 0));
 
             // line 3 (vStart3 -> index 2)
             const v2 = worldVertex(cube, 2, object);
@@ -172,22 +182,27 @@
             const yOffsetNeg = new THREE.Vector3(0, -kStroke, 0);
             const yOffsetPos = new THREE.Vector3(0, kStroke, 0);
 
+            // --- rebuild the three strips inside kGroup ---
             clearStrips();
 
-            strip1 = makeStrip(vStart1, vEnd1, xOffset, matWhiteDS);
-            strip2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS);
-            //strip3 = makeStrip(v2, vStart3, yOffsetPos, matWhiteDS);
-            strip3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS);
-            addOutline(strip1);
-            addOutline(strip2);
-            addOutline(strip3);
+            let s1 = makeStrip(vStart1, vEnd1, xOffset, matWhiteDS.clone());
+            let s2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS.clone());
+            let s3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS.clone());
 
-            scene.add(strip1, strip2, strip3);
+            addOutline(s1);
+            addOutline(s2);
+            addOutline(s3);
 
-            strip2.material.depthWrite = false;
-            strip1.material.depthWrite = false;
-            strip1.renderOrder = 0;
-            strip2.renderOrder = 1;
+            // per-strip depth tweaks
+            s1.material.depthWrite = false;
+            s2.material.depthWrite = false;
+            s1.renderOrder = 0;
+            s2.renderOrder = 1;
+
+            kGroup.add(s1, s2, s3);
+
+            // keep references if you use them elsewhere
+            strip1 = s1; strip2 = s2; strip3 = s3;
         }
 
         function addOutline(strip, alwaysOnTop = true) {
@@ -460,9 +475,9 @@
             const input = el.querySelector('input');
             if (input) input.style.display = 'none';     // hide the text field
             el.style.pointerEvents = 'none';             // not clickable
-            el.style.borderTop = '1px solid rgba(255,255,255,0.12)';
-            el.style.marginTop = '6px';
-            el.style.paddingTop = '6px';
+            el.style.borderTop = '1px solid rgba(0,0,0,1)';
+            el.style.marginTop = '-1px';
+            el.style.paddingTop = '0px';
             el.style.opacity = '0.85';
             return ctrl;
         }
@@ -536,39 +551,39 @@
         staticFolder.add(boxParams, 'depth', 1, 10, 0.01).onChange(applyBoxSize);
         staticFolder.open(false);
 
-// --- GUI: Static rotation (degrees) ---
-addLabel(staticFolder, 'Rotation');
+        // --- GUI: Static rotation (degrees) ---
+        addLabel(staticFolder, 'Rotation');
 
-const staticRot = { x: 0, y: 0, z: 0 };   // degrees
-const rotStep   = { step: 0.1 };          // <— make 0.1 user-adjustable
+        const staticRot = { x: 0, y: 0, z: 0 };   // degrees
+        const rotStep = { step: 0.1 };          // <— make 0.1 user-adjustable
 
-// create controllers first
-const xCtrl = staticFolder.add(staticRot, 'x', -180, 180).name('X (°)').onChange(applyStaticRotation);
-const yCtrl = staticFolder.add(staticRot, 'y', -180, 180).name('Y (°)').onChange(applyStaticRotation);
-const zCtrl = staticFolder.add(staticRot, 'z', -180, 180).name('Z (°)').onChange(applyStaticRotation);
+        // create controllers first
+        const xCtrl = staticFolder.add(staticRot, 'x', -180, 180).name('X (°)').onChange(applyStaticRotation);
+        const yCtrl = staticFolder.add(staticRot, 'y', -180, 180).name('Y (°)').onChange(applyStaticRotation);
+        const zCtrl = staticFolder.add(staticRot, 'z', -180, 180).name('Z (°)').onChange(applyStaticRotation);
 
-// set initial step
-[xCtrl, yCtrl, zCtrl].forEach(c => c.step(rotStep.step));
+        // set initial step
+        [xCtrl, yCtrl, zCtrl].forEach(c => c.step(rotStep.step));
 
-// step size control
-staticFolder.add(rotStep, 'step', 0.01, 45, 0.01).name('Step (°)').onChange((s) => {
-  [xCtrl, yCtrl, zCtrl].forEach(c => c.step(s));
-});
+        // step size control
+        staticFolder.add(rotStep, 'step', 0.01, 45, 0.01).name('Step (°)').onChange((s) => {
+            [xCtrl, yCtrl, zCtrl].forEach(c => c.step(s));
+        });
 
-// optional reset
-staticFolder.add({ reset: () => { staticRot.x = staticRot.y = staticRot.z = 0; applyStaticRotation(); } }, 'reset').name('Reset');
+        // optional reset
+        staticFolder.add({ reset: () => { staticRot.x = staticRot.y = staticRot.z = 0; applyStaticRotation(); } }, 'reset').name('Reset');
 
-// apply only when rotation animation is OFF
-function applyStaticRotation() {
-  if (rotateEnabled) return;
-  const rx = THREE.MathUtils.degToRad(staticRot.x);
-  const ry = THREE.MathUtils.degToRad(staticRot.y);
-  const rz = THREE.MathUtils.degToRad(staticRot.z);
-  scene.traverse((child) => {
-    if (child.parent !== scene) return;
-    child.rotation.set(rx, ry, rz);
-  });
-}
+        // apply only when rotation animation is OFF
+        function applyStaticRotation() {
+            if (rotateEnabled) return;
+            const rx = THREE.MathUtils.degToRad(staticRot.x);
+            const ry = THREE.MathUtils.degToRad(staticRot.y);
+            const rz = THREE.MathUtils.degToRad(staticRot.z);
+            scene.traverse((child) => {
+                if (child.parent !== scene) return;
+                child.rotation.set(rx, ry, rz);
+            });
+        }
 
 
         // ---- GUI: Animation staticFolder (toggle) ----
@@ -963,7 +978,7 @@ function applyStaticRotation() {
         animate();
 
 
-        
+
     </script>
 </body>
 

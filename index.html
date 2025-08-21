@@ -9,6 +9,23 @@
         svg {
             display: block;
         }
+
+        .lil-gui {
+            --background-color: #ffffff;
+            --text-color: rgb(0, 0, 0);
+            --widget-color: rgb(0, 0, 0);
+            --number-color: #ffffff;
+            --padding: 2px;
+
+        }
+
+        .lil-gui .title:hover {
+            --title-background-color: rgb(105, 105, 105);
+        }
+
+        .lil-gui .controller.disabled {
+            font-weight: 600;
+        }
     </style>
 </head>
 
@@ -481,7 +498,7 @@
             el.style.opacity = '0.85';
             return ctrl;
         }
-        const gui = new GUI({ closeFolders: true });
+        const gui = new GUI({ closeFolders: true }, { injectStyles: false });
 
         const viewUI = { Renderer: 'WebGL (Video Output)' };
         gui.add(viewUI, 'Renderer', ['WebGL (Video Output)', 'SVG (SVG Output)'])

@@ -281,8 +281,8 @@ color: #ffffff;
             scene = new THREE.Scene();
             scene.background = new THREE.Color(params.bg);
 
-            //renderer = new SVGRenderer();
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer = new SVGRenderer();
+            //renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setPixelRatio(window.devicePixelRatio);
 
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -381,7 +381,7 @@ color: #ffffff;
 
         //====================render functions start====================
 
-        let currentRenderer = 'WebGL (Video Output)'; // or 'SVG'
+        let currentRenderer = 'SVG (SVG Output)'; // or 'SVG'
 
         function createRenderer(kind) {
             if (kind === 'SVG (SVG Output)') {
@@ -505,7 +505,7 @@ color: #ffffff;
         }
         const gui = new GUI({ closeFolders: true }, { injectStyles: false });
 
-        const viewUI = { Renderer: 'WebGL (Video Output)' };
+        const viewUI = { Renderer: 'SVG (SVG Output)' };
         gui.add(viewUI, 'Renderer', ['WebGL (Video Output)', 'SVG (SVG Output)'])
             .name('Renderer')
             .onChange((mode) => switchRenderer(mode));
@@ -568,10 +568,10 @@ color: #ffffff;
         };
 
         staticFolder.add(boxParams, 'mode', ['Scale', 'Rebuild']).name('Resize via').onChange(applyBoxSize);
-        staticFolder.add(boxParams, 'width', 1, 10, 0.01).onChange(applyBoxSize);
+        staticFolder.add(boxParams, 'width', 0, 10, 0.01).onChange(applyBoxSize);
         staticFolder.add(boxParams, 'height', 1, 10, 0.01).onChange(applyBoxSize);
         staticFolder.add(boxParams, 'depth', 1, 10, 0.01).onChange(applyBoxSize);
-        staticFolder.open(false);
+        staticFolder.open(true);
 
         // --- GUI: Static rotation (degrees) ---
         addLabel(staticFolder, 'Rotation');
@@ -611,6 +611,7 @@ color: #ffffff;
         // ---- GUI: Animation staticFolder (toggle) ----
 
         const animFolder = gui.addFolder('Animation');
+        animFolder.open(false);
 
         const rotateUI = { enabled: false, period: 6 }; // default: 8s per turn
         animFolder.add(rotateUI, 'enabled').name('Rotation').onChange(v => { rotateEnabled = v; });

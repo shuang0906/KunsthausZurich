@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>three.js + AABB 叠加（目标 vs 实测）</title>
+    <style>
+        :root {
+
+            --fg: #111;
+            --bg: #fafafa;
+            --muted: #666;
+            --border: #e9e9e9;
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--fg);
+            font: 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto
+        }
+
+        .wrap {
+            max-width: 980px;
+            margin: 24px auto;
+            padding: 16px
+        }
+
+        .ui {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 12px
+        }
+
+        .card {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px;
+            background: #fff
+        }
+
+        label {
+            min-width: 110px;
+            color: var(--muted);
+            display: inline-block
+        }
+
+        input {
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            width: 120px
+        }
+
+        button {
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #111;
+            color: #fff;
+            cursor: pointer
+        }
+
+        button.secondary {
+            background: #fff;
+            color: #111
+        }
+
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
+        }
+
+        .row {
+            margin: 6px 0
+        }
+
+        .stage {
+            position: relative;
+            width: 100%;
+            max-width: 980px
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: auto;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: #fff;
+            width: 980px; height: 540px;
+        }
+
+        .legend {
+            font-size: 13px;
+            color: #555
+        }
+
+        .legend span {
+            display: inline-block;
+            margin-right: 12px
+        }
+
+        .greenDot {
+            width: 10px;
+            height: 10px;
+            background: #0a7a35;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px
+        }
+
+        .orangeDot {
+            width: 10px;
+            height: 10px;
+            background: #b35300;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px
+        }
+
+        .ok {
+            color: #0a7a35
+        }
+
+        .warn {
+            color: #b35300
+        }
+
+        .err {
+            color: #c21807
+        }
+    </style>
+</head>
+
+<body>
+    <div class="wrap">
+        <div class="ui">
+            <div class="card">
+                <div class="row">
+                    <label for="ratio">目标比例 W/H</label>
+                    <input id="ratio" class="mono" value="1:1" placeholder="如 3:2 或 1.5">
+                </div>
+                <div class="row">
+                    <label>旋转（度）</label>
+                    <input id="pitch" class="mono" type="number" step="0.1" value="15" title="pitch 绕 X">
+                    <input id="yaw" class="mono" type="number" step="0.1" value="30" title="yaw 绕 Y">
+                    <button id="rand" class="secondary">随机旋转</button>
+                </div>
+                <div class="row" style="display:flex;gap:8px">
+                    <button id="apply">应用并求解</button>
+                </div>
+                <div class="row mono" id="msg">—</div>
+            </div>
+
+            <div class="card mono">
+                <div class="row">求解的 <b>hx</b>：<span id="hx">—</span></div>
+                <div class="row">新的 <b>Width</b>：<span id="width">—</span></div>
+                <div class="row">分母检查：<span id="den">—</span></div>
+                <hr>
+                <div class="row"><b>公式回算</b> W/H：<span id="wh">—</span>，相对误差：<span id="err1">—</span></div>
+                <div class="row"><b>投影实测</b> W/H：<span id="wh2">—</span>，相对误差：<span id="err2">—</span></div>
+                <div class="row legend">
+                    <span><i class="greenDot"></i>目标 AABB（同中心、同 H，W=t·H）</span>
+                    <span><i class="orangeDot"></i>实际 AABB（投影角点）</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="stage">
+            <canvas id="webgl"></canvas>
+            <canvas id="overlay"
+                style="position:absolute;left:0;top:0;pointer-events:none; background: transparent;"></canvas>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+
+        const webgl = document.getElementById('webgl');
+        const overlay = document.getElementById('overlay');
+        const renderer = new THREE.WebGLRenderer({
+            canvas: webgl,
+            antialias: true,
+            alpha: true    // 透明背景
+        });
+        renderer.setClearColor(0x000000, 0);
+
+        function setSize() {
+            const cssW = 980, cssH = 540;
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            renderer.setPixelRatio(dpr);
+            renderer.setSize(cssW, cssH, false);
+
+            overlay.style.width = cssW + 'px';
+            overlay.style.height = cssH + 'px';
+            overlay.width = Math.round(cssW * dpr);
+            overlay.height = Math.round(cssH * dpr);
+        }
+        setSize();
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xffffff);
+
+        const aspect = renderer.domElement.width / renderer.domElement.height;
+        const frustumHeight = 8;
+        const frustumWidth = frustumHeight * aspect;
+        const camera = new THREE.OrthographicCamera(
+            -frustumWidth / 2, frustumWidth / 2,
+            frustumHeight / 2, -frustumHeight / 2,
+            -100, 100
+        );
+        camera.position.set(0, 0, 10);
+        camera.lookAt(0, 0, 0);
+
+        const geo = new THREE.BoxGeometry(4, 2, 2); // Width=4, Height=2, Depth=2
+        const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0.9, transparent: true });
+        const mesh = new THREE.Mesh(geo, mat);
+        scene.add(mesh);
+
+        // 可视参考
+        const axes = new THREE.AxesHelper(3);
+        scene.add(axes);
+
+        // 3D 里渲染一个包围盒辅助线（会随 mesh 变化自动更新一次）
+        const worldBox = new THREE.Box3().setFromObject(mesh);
+        const boxHelper = new THREE.Box3Helper(worldBox, 0xff8800); // 橙色
+        scene.add(boxHelper);
+
+        function render() { renderer.render(scene, camera); }
+
+        const el = id => document.getElementById(id);
+        function parseRatio(str) {
+            str = String(str).trim();
+            if (!str) return NaN;
+            if (str.includes(':')) {
+                const [a, b] = str.split(':').map(Number);
+                if (isFinite(a) && isFinite(b) && b !== 0) return a / b;
+                return NaN;
+            } else {
+                const v = Number(str);
+                return isFinite(v) ? v : NaN;
+            }
+        }
+        function deg2rad(d) { return d * Math.PI / 180; }
+
+        function getAbsR01(obj) {
+            const q = new THREE.Quaternion();
+            obj.getWorldQuaternion(q);
+            const m = new THREE.Matrix4().makeRotationFromQuaternion(q);
+            const e = m.elements; // 列主序
+            const a00 = Math.abs(e[0]);  // R00
+            const a01 = Math.abs(e[4]);  // R01
+            const a02 = Math.abs(e[8]);  // R02
+            const a10 = Math.abs(e[1]);  // R10
+            const a11 = Math.abs(e[5]);  // R11
+            const a12 = Math.abs(e[9]);  // R12
+            return { a00, a01, a02, a10, a11, a12 };
+        }
+        function solveHxForWH(t, R) {
+            const hy = 1, hz = 1;
+            const { a00, a01, a02, a10, a11, a12 } = R;
+            const A = a01 * hy + a02 * hz;
+            const B = a11 * hy + a12 * hz;
+            const denom = (a00 - t * a10);
+            return { hx: (t * B - A) / denom, A, B, denom };
+        }
+        function recomputeWH_byFormula(hx, R) {
+            const hy = 1, hz = 1;
+            const { a00, a01, a02, a10, a11, a12 } = R;
+            const A = a01 * hy + a02 * hz;
+            const B = a11 * hy + a12 * hz;
+            const W = 2 * (a00 * hx + A);
+            const H = 2 * (a10 * hx + B);
+            return W / H;
+        }
+        function measuredAABB_byProjection(hx) {
+            const hy = 1, hz = 1;
+            const corners = [
+                new THREE.Vector3(hx, hy, hz),
+                new THREE.Vector3(hx, hy, -hz),
+                new THREE.Vector3(hx, -hy, hz),
+                new THREE.Vector3(hx, -hy, -hz),
+                new THREE.Vector3(-hx, hy, hz),
+                new THREE.Vector3(-hx, hy, -hz),
+                new THREE.Vector3(-hx, -hy, hz),
+                new THREE.Vector3(-hx, -hy, -hz),
+            ];
+            const m = mesh.matrixWorld.clone();
+            const v = new THREE.Vector3();
+
+            let minX = +Infinity, maxX = -Infinity, minY = +Infinity, maxY = -Infinity;
+            for (const p of corners) {
+                v.copy(p).applyMatrix4(m).project(camera);
+                if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
+                if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
+            }
+            // NDC (-1..1) → 像素
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const Wpx = overlay.width;  // 已乘 dpr
+            const Hpx = overlay.height;
+            const toPx = (x_ndc, W) => (x_ndc * 0.5 + 0.5) * W;
+            const x0 = toPx(minX, Wpx), x1 = toPx(maxX, Wpx);
+            const y0 = toPx(1 - (maxY * 0.5 + 0.5) * 2 + 1, Hpx); // 直接算下面会更直观
+            // 更直接：NDC→像素：px = (x*0.5+0.5)*W；py = (1-(y*0.5+0.5))*H
+            const toPy = (y_ndc, H) => (1 - (y_ndc * 0.5 + 0.5)) * H;
+            const yMinPx = toPy(minY, Hpx), yMaxPx = toPy(maxY, Hpx);
+
+            const rect = {
+                x: x0, y: yMaxPx, w: (x1 - x0), h: (yMinPx - yMaxPx)
+            };
+            const wh = (x1 - x0) / (yMinPx - yMaxPx);
+            return { rect, wh, center: { x: (x0 + x1) / 2, y: (yMaxPx + yMinPx) / 2 } };
+        }
+
+        function drawAABBs(targetWH, measuredRect) {
+            const ctx = overlay.getContext('2d');
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+            // 实测 AABB（橙色）
+            //   ctx.lineWidth = 2 * dpr;
+            //   ctx.strokeStyle = '#b35300';
+            //   ctx.setLineDash([6*dpr, 4*dpr]);
+            //   ctx.strokeRect(measuredRect.x, measuredRect.y, measuredRect.w, measuredRect.h);
+
+            // 目标 AABB：与实测同中心、同 H，W = t * H
+              const H = measuredRect.h;
+              const W = targetWH * H;
+              const cx = measuredRect.x + measuredRect.w/2;
+              const cy = measuredRect.y + measuredRect.h/2;
+              const x = cx - W/2;
+              const y = cy - H/2;
+
+              ctx.setLineDash([]);
+              ctx.strokeStyle = '#0a7a35';
+              ctx.strokeRect(x, y, W, H);
+        }
+
+        const pitchIn = el('pitch');
+        const yawIn = el('yaw');
+        const ratioIn = el('ratio');
+        const randBtn = el('rand');
+        const applyBtn = el('apply');
+
+        const hxOut = el('hx');
+        const widthOut = el('width');
+        const denOut = el('den');
+        const whOut = el('wh');
+        const err1Out = el('err1');
+        const wh2Out = el('wh2');
+        const err2Out = el('err2');
+        const msg = el('msg');
+
+        function randomRot() {
+            const yaw = (Math.random() * 360 - 180);
+            const pitch = (Math.random() * 180 - 90);
+            yawIn.value = yaw.toFixed(2);
+            pitchIn.value = pitch.toFixed(2);
+            msg.textContent = '已随机生成 yaw/pitch。';
+        }
+
+        function applyAndSolve() {
+            const t = parseRatio(ratioIn.value);
+            const yaw = Number(yawIn.value);
+            const pitch = Number(pitchIn.value);
+            if (!isFinite(t) || t <= 0) { msg.innerHTML = '<span class="err">比例无效。</span>'; return; }
+
+            // 设置旋转（不绕 Z）
+            mesh.rotation.set(deg2rad(pitch), deg2rad(yaw), 0, 'XYZ');
+            mesh.updateMatrixWorld(true);
+
+            // 取世界旋转绝对值
+            const R = getAbsR01(mesh);
+
+            // 解 hx, 设置 scale.x
+            const { hx, A, B, denom } = solveHxForWH(t, R);
+            denOut.textContent = denom.toFixed(9);
+            const EPS = 1e-10;
+
+            if (Math.abs(denom) < EPS) {
+                // 分母≈0：检查是否无需改宽即可满足
+                const WH_noWidth = A / B;
+                const rel = Math.abs(WH_noWidth - t) / t;
+                hxOut.textContent = '（任意）';
+                widthOut.textContent = '（任意）';
+                whOut.textContent = WH_noWidth.toFixed(9);
+                err1Out.textContent = (rel * 100).toFixed(6) + '%';
+                if (rel < 5e-3) {
+                    msg.innerHTML = '<span class="ok">分母≈0，但该姿态本来就满足目标，无需改宽。</span>';
+                } else {
+                    msg.innerHTML = '<span class="warn">分母≈0 且本姿态无法通过改宽达到此比例，请换个旋转。</span>';
+                }
+                // 不改 scale 直接测 AABB
+                mesh.scale.set(1, 1, 1);
+                mesh.updateMatrixWorld(true);
+
+            } else {
+                if (!(isFinite(hx) && hx > 0)) {
+                    msg.innerHTML = '<span class="warn">解得 hx ≤ 0 或非有限值；此姿态/目标不可行。</span>';
+                    return;
+                }
+                const width = 2 * hx;
+                mesh.scale.set(hx / 2, 1, 1); // 初始半宽=2 ⇒ 新 scale.x = hx/2
+                mesh.updateMatrixWorld(true);
+
+                // 公式回算
+                const wh_formula = recomputeWH_byFormula(hx, R);
+                const err1 = Math.abs(wh_formula - t) / t;
+                hxOut.textContent = hx.toFixed(9);
+                widthOut.textContent = width.toFixed(9);
+                whOut.textContent = wh_formula.toFixed(9);
+                err1Out.textContent = (err1 * 100).toFixed(6) + '%';
+
+                msg.innerHTML = err1 < 5e-3
+                    ? '<span class="ok">OK：公式回算已在 0.5% 内。</span>'
+                    : '<span class="warn">公式回算误差 > 0.5%，请检查旋转/取值。</span>';
+            }
+
+            mesh.updateMatrixWorld(true);   // 确保世界矩阵是最新的
+            worldBox.setFromObject(mesh);   // 用最新的 mesh 计算 AABB
+            boxHelper.box.copy(worldBox);   // 同步给 helper
+            boxHelper.updateMatrixWorld(true);
+
+            // 投影实测 + 画两个 AABB
+            const currentHx = mesh.scale.x * 4 / 2 || 2; // 由 scale 反推 hx；若未改则是初始 2
+            const measured = measuredAABB_byProjection(currentHx);
+            const err2 = Math.abs(measured.wh - t) / t;
+            wh2Out.textContent = measured.wh.toFixed(9);
+            err2Out.textContent = (err2 * 100).toFixed(6) + '%';
+
+            drawAABBs(t, measured.rect);
+
+            render();
+        }
+
+        window.addEventListener('resize', () => {
+            setSize();
+            camera.left = -frustumWidth / 2;
+            camera.right = frustumWidth / 2;
+            camera.top = frustumHeight / 2;
+            camera.bottom = -frustumHeight / 2;
+            camera.updateProjectionMatrix();
+            render();
+        });
+
+        randBtn.addEventListener('click', randomRot);
+        applyBtn.addEventListener('click', applyAndSolve);
+        applyAndSolve();
+    </script>
+</body>
+
+</html>

@@ -1,18 +1,46 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="zh-CN">
 
 <head>
-    <title>three.js svg - lines</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
-    <style>
-        svg {
-            display: block;
-        }
-    </style>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Logo Composer — Kunsthaus Zürich</title>
+    <link rel="stylesheet" href="style.css">
 </head>
+<style>
+    svg {
+        background-color: transparent !important;
+    }
+</style>
 
 <body>
+    <img id="bg" alt="" />
+    <input id="file" type="file" accept="image/*" hidden />
+
+    <div class="wrap">
+        <div class="ui" style="position: absolute; z-index: 10; display: none;">
+            <div class="card">
+                <div class="row mono" id="msg">—</div>
+            </div>
+            <div class="card mono">
+                <div class="row">求解的 <b>hx</b>：<span id="hx">—</span></div>
+                <div class="row">新的 <b>Width</b>：<span id="width">—</span></div>
+                <div class="row">分母检查：<span id="den">—</span></div>
+                <hr>
+                <div class="row"><b>公式回算</b> W/H：<span id="wh">—</span>，相对误差：<span id="err1">—</span></div>
+                <div class="row"><b>投影实测</b> W/H：<span id="wh2">—</span>，相对误差：<span id="err2">—</span></div>
+                <div class="row legend">
+                    <span><i class="greenDot"></i>目标 AABB（同中心、同 H，W=t·H）</span>
+                    <span><i class="orangeDot"></i>实际 AABB（投影角点）</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="stage">
+            <canvas id="overlay"
+                style="position:absolute;left:0;top:0;pointer-events:none; background: transparent;"></canvas>
+        </div>
+    </div>
 
     <script type="importmap">
 			{
@@ -24,40 +52,60 @@
 		</script>
 
     <script type="module">
-
         import * as THREE from 'three';
-
         import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
-        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        import { GUI } from 'https://unpkg.com/three@0.167.1/examples/jsm/libs/lil-gui.module.min.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
+        import { saveCurrentSVG, startCanvasRecording } from './export.js';
 
-        //THREE.ColorManagement.enabled = false;
-
-        let camera, controls, scene, renderer;
-        let cube, object, box;
+        let kGroup;
         let strip1, strip2, strip3;
+        let targetCtrl, yawCtrl, pitchCtrl;
+        let info;
+        let TARGET_PX = 400;
 
-        const container = document.body;
+        const el = id => document.getElementById(id);
+        function parseRatio(str) {
+            str = String(str).trim();
+            if (!str) return NaN;
+            if (str.includes(':')) {
+                const [a, b] = str.split(':').map(Number);
+                if (isFinite(a) && isFinite(b) && b !== 0) return a / b;
+                return NaN;
+            } else {
+                const v = Number(str);
+                return isFinite(v) ? v : NaN;
+            }
+        }
 
-        var kStroke = 0.3;
+        const hxOut = el('hx');
+        const widthOut = el('width');
+        const denOut = el('den');
+        const whOut = el('wh');
+        const err1Out = el('err1');
+        const wh2Out = el('wh2');
+        const err2Out = el('err2');
+        const msg = el('msg');
+
         const baseDims = { w: 4, h: 2, d: 2 };
 
-        const clock = new THREE.Clock();
-
-        let rotateEnabled = false;
-
-        const params = {
-            bg: '#000000', // initial color
-            cStroke: '#66ccff',
+        const boxParams = {
+            kStroke: 0.2,
+            width: baseDims.w,
+            height: baseDims.h,
+            depth: baseDims.d
         };
 
-        // any material that should follow cStroke goes here
+        const colorParams = {
+            bg: '#000000',
+            cStroke: '#000000',
+        };
+
         const strokeMats = new Set();
 
         function trackStrokeMaterial(mat) {
             // tag & set initial color
-            if (mat && mat.color) mat.color.set(params.cStroke);
+            if (mat && mat.color) mat.color.set(colorParams.cStroke);
             strokeMats.add(mat);
             return mat; // so you can inline it
         }
@@ -71,15 +119,691 @@
                     mat.color?.set(v);
                 }
             });
+            render();
         }
+
         const matWhiteDS = trackStrokeMaterial(
-            new THREE.MeshBasicMaterial({ color: params.cStroke, side: THREE.DoubleSide })
+            new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide })
         );
         const matLine = trackStrokeMaterial(
-            new THREE.LineBasicMaterial({ color: params.cStroke })
+            new THREE.LineBasicMaterial({ color: colorParams.cStroke })
         );
 
-        init();
+
+        const AABBParams = {
+            targetRatio: "1:1",
+            pitch: 15,
+            yaw: 30,
+            animation: true,
+            duration: 1,
+            applyAndSolve: applyAndSolve,
+            randomAndSolve: randomAndSolve
+        }
+        const svgParams = {
+            filename: 'logo.svg',
+            background: true,
+            save: () => (switchRenderer("SVG (SVG Output)"), saveCurrentSVG(renderer.domElement, svgParams.filename, svgParams.background), render()),
+        };
+
+        const recParams = {
+            seconds: AABBParams.duration || 5,
+            fps: 60,
+            filename: 'capture.webm',
+        };
+
+        const recordActions = {
+            startRecord() {
+                switchRenderer("webgl");
+                startCanvasRecording(renderer, {
+                    seconds: recParams.seconds,
+                    fps: recParams.fps,
+                    filename: recParams.filename
+                });
+            }
+        };
+
+        const comboActions = {
+            startAnimRecord() {
+                applyAndSolve();
+                recordActions.startRecord();
+            }
+        };
+
+        const overlay = document.getElementById('overlay');
+        let renderer = new SVGRenderer();
+
+        const al = renderer.domElement;
+
+        document.body.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        scene.traverse(o => o.layers.enable(0));
+
+
+        let lastMeasuredRect = null;
+        let lastTargetWH = null;
+
+        function setSize() {
+            const cssW = window.innerWidth;
+            const cssH = window.innerHeight;
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            overlay.style.width = cssW + 'px';
+            overlay.style.height = cssH + 'px';
+            overlay.width = Math.round(cssW * dpr);
+            overlay.height = Math.round(cssH * dpr);
+
+            if (lastMeasuredRect) {
+                drawAABBs(lastTargetWH, lastMeasuredRect);
+            }
+        }
+        const frustumHeight = 8;
+        const aspect = window.innerWidth / window.innerHeight;
+        const camera = new THREE.OrthographicCamera(
+            -frustumHeight * aspect / 2,
+            frustumHeight * aspect / 2,
+            frustumHeight / 2,
+            -frustumHeight / 2,
+            -100, 100
+        );
+
+        function updateCamera() {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.top = frustumHeight / 2;
+            camera.bottom = -frustumHeight / 2;
+            camera.left = -frustumHeight * aspect / 2;
+            camera.right = frustumHeight * aspect / 2;
+            camera.updateProjectionMatrix();
+        }
+
+
+        let poseGroup = new THREE.Group();
+        scene.add(poseGroup);
+
+        const geo = new THREE.BoxGeometry(4, 2, 2); // Width=4, Height=2, Depth=2
+        geo.computeBoundingBox();
+        const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+        const mesh = new THREE.Mesh(geo, mat);
+        const box = new THREE.BoxHelper(mesh, colorParams.cStroke);
+        box.matrixAutoUpdate = true;
+        mesh.add(box);
+        poseGroup.add(mesh);
+
+        // 3D 里渲染一个包围盒辅助线（会随 mesh 变化自动更新一次）
+        const worldBox = new THREE.Box3().setFromObject(mesh);
+        const boxHelper = new THREE.Box3Helper(worldBox, 0xD4D4D4); // 橙色
+        scene.add(boxHelper);
+
+        function render() { renderer.render(scene, camera); }
+
+        window.addEventListener('resize', () => {
+            setSize();
+            updateCamera();
+            render();
+        });
+
+        // also call once on init:
+        setSize();
+        updateCamera();
+
+        function deg2rad(d) { return d * Math.PI / 180; }
+
+        function getAbsR01(obj) {
+            const q = new THREE.Quaternion();
+            obj.getWorldQuaternion(q);
+            const m = new THREE.Matrix4().makeRotationFromQuaternion(q);
+            const e = m.elements; // 列主序
+            const a00 = Math.abs(e[0]);  // R00
+            const a01 = Math.abs(e[4]);  // R01
+            const a02 = Math.abs(e[8]);  // R02
+            const a10 = Math.abs(e[1]);  // R10
+            const a11 = Math.abs(e[5]);  // R11
+            const a12 = Math.abs(e[9]);  // R12
+            return { a00, a01, a02, a10, a11, a12 };
+        }
+        function solveHxForWH(t, R) {
+            const hy = 1, hz = 1;
+            const { a00, a01, a02, a10, a11, a12 } = R;
+            const A = a01 * hy + a02 * hz;
+            const B = a11 * hy + a12 * hz;
+            const denom = (a00 - t * a10);
+            return { hx: (t * B - A) / denom, A, B, denom };
+        }
+        function recomputeWH_byFormula(hx, R) {
+            const hy = 1, hz = 1;
+            const { a00, a01, a02, a10, a11, a12 } = R;
+            const A = a01 * hy + a02 * hz;
+            const B = a11 * hy + a12 * hz;
+            const W = 2 * (a00 * hx + A);
+            const H = 2 * (a10 * hx + B);
+            return W / H;
+        }
+        function measuredAABB_byProjection(hx) {
+            const hy = 1, hz = 1;
+            const corners = [
+                new THREE.Vector3(hx, hy, hz),
+                new THREE.Vector3(hx, hy, -hz),
+                new THREE.Vector3(hx, -hy, hz),
+                new THREE.Vector3(hx, -hy, -hz),
+                new THREE.Vector3(-hx, hy, hz),
+                new THREE.Vector3(-hx, hy, -hz),
+                new THREE.Vector3(-hx, -hy, hz),
+                new THREE.Vector3(-hx, -hy, -hz),
+            ];
+            const m = mesh.matrixWorld.clone();
+            const v = new THREE.Vector3();
+
+            let minX = +Infinity, maxX = -Infinity, minY = +Infinity, maxY = -Infinity;
+            for (const p of corners) {
+                v.copy(p).applyMatrix4(m).project(camera);
+                if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
+                if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
+            }
+            // NDC (-1..1) → 像素
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const Wpx = overlay.width;  // 已乘 dpr
+            const Hpx = overlay.height;
+            const toPx = (x_ndc, W) => (x_ndc * 0.5 + 0.5) * W;
+            const x0 = toPx(minX, Wpx), x1 = toPx(maxX, Wpx);
+            const y0 = toPx(1 - (maxY * 0.5 + 0.5) * 2 + 1, Hpx); // 直接算下面会更直观
+            // 更直接：NDC→像素：px = (x*0.5+0.5)*W；py = (1-(y*0.5+0.5))*H
+            const toPy = (y_ndc, H) => (1 - (y_ndc * 0.5 + 0.5)) * H;
+            const yMinPx = toPy(minY, Hpx), yMaxPx = toPy(maxY, Hpx);
+
+            const rect = {
+                x: x0, y: yMaxPx, w: (x1 - x0), h: (yMinPx - yMaxPx)
+            };
+            const wh = (x1 - x0) / (yMinPx - yMaxPx);
+            return { rect, wh, center: { x: (x0 + x1) / 2, y: (yMaxPx + yMinPx) / 2 } };
+        }
+
+        function drawAABBs(targetWH, measuredRect) {
+            lastTargetWH = targetWH;
+            lastMeasuredRect = measuredRect;
+
+            const ctx = overlay.getContext('2d');
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+            // 目标 AABB：与实测同中心、同 H，W = t * H
+            const H = measuredRect.h;
+            const W = targetWH * H;
+            const cx = measuredRect.x + measuredRect.w / 2;
+            const cy = measuredRect.y + measuredRect.h / 2;
+            const x = cx - W / 2;
+            const y = cy - H / 2;
+
+            ctx.setLineDash([]);
+            ctx.strokeStyle = '#0a7a35';
+            ctx.strokeRect(x, y, W, H);
+            console.log('draw target AABB', { x, y, W, H });
+
+            ctx.beginPath();
+            ctx.arc(95, 50, 40, 0, 2 * Math.PI);
+            ctx.stroke();
+        }
+
+        function randomV() {
+            const ranges = [
+                { min: -170, max: -100 },
+                { min: -80, max: -10 },
+                { min: 10, max: 80 },
+                { min: 100, max: 170 },
+            ];
+            const specials = [0, 90, 180];
+
+            const wRange = 0.90 / ranges.length;    // 0.225 each
+            const wSpec = 0.10 / specials.length;  // ~0.03333 each
+
+            const buckets = [
+                ...ranges.map(r => ({ type: 'range', r, w: wRange })),
+                ...specials.map(v => ({ type: 'value', v, w: wSpec })),
+            ];
+
+            // weighted pick
+            const r = Math.random();
+            let acc = 0;
+            for (const b of buckets) {
+                acc += b.w;
+                if (r < acc) {
+                    if (b.type === 'range') {
+                        const { min, max } = b.r;
+                        return min + Math.random() * (max - min);
+                    } else {
+                        return b.v; // exact 0 / 90 / 180
+                    }
+                }
+            }
+            // fallback (floating point edge)
+            return specials[specials.length - 1];
+        }
+
+
+        function randomYawPitch() {
+            AABBParams.yaw = randomV();
+            AABBParams.pitch = randomV();
+            if (yawCtrl) yawCtrl.updateDisplay();
+            if (pitchCtrl) pitchCtrl.updateDisplay();
+        }
+
+        function fitCameraToBox(box, camera, margin = 1.2) {
+            const size = new THREE.Vector3();
+            box.getSize(size); // 得到包围盒宽高深（世界空间）
+
+            // 只需要考虑 X 和 Y（因为相机朝 Z 看）
+            const boxWidth = size.x;
+            const boxHeight = size.y;
+
+            const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
+            const boxAspect = boxWidth / boxHeight;
+
+            let viewHeight;
+            if (boxAspect > aspect) {
+                // 盒子更扁 → 按宽度适配
+                viewHeight = boxWidth / aspect;
+            } else {
+                // 盒子更高 → 按高度适配
+                viewHeight = boxHeight;
+            }
+            viewHeight *= margin; // 加点 margin，避免顶边
+
+            camera.top = viewHeight / 2;
+            camera.bottom = -viewHeight / 2;
+            camera.left = -viewHeight * aspect / 2;
+            camera.right = viewHeight * aspect / 2;
+            camera.updateProjectionMatrix();
+        }
+
+        // 用 Box3 + 投影到 NDC → 像素，得到屏幕 AABB 宽度（px）
+        function measureAABBWidthPx(box3, camera, overlayCanvas) {
+            const { min, max } = box3;
+            const corners = [
+                new THREE.Vector3(min.x, min.y, min.z),
+                new THREE.Vector3(min.x, min.y, max.z),
+                new THREE.Vector3(min.x, max.y, min.z),
+                new THREE.Vector3(min.x, max.y, max.z),
+                new THREE.Vector3(max.x, min.y, min.z),
+                new THREE.Vector3(max.x, min.y, max.z),
+                new THREE.Vector3(max.x, max.y, min.z),
+                new THREE.Vector3(max.x, max.y, max.z),
+            ];
+            const v = new THREE.Vector3();
+
+            let minX = +Infinity, maxX = -Infinity;
+            for (const p of corners) {
+                v.copy(p).project(camera); // NDC [-1,1]
+                if (v.x < minX) minX = v.x;
+                if (v.x > maxX) maxX = v.x;
+            }
+
+            // NDC → 像素（overlay.width/height 已含 dpr）
+            const Wpx = overlayCanvas.width;
+            const xToPx = xNdc => (xNdc * 0.5 + 0.5) * Wpx;
+            const x0 = xToPx(minX), x1 = xToPx(maxX);
+            return (x1 - x0); // 屏幕 AABB 宽度（像素）
+        }
+
+        // 利用 Box3 + 投影到 overlay，得到屏幕像素矩形（你之前已有的函数）
+        function measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas) {
+            const { min, max } = box3;
+            const corners = [
+                new THREE.Vector3(min.x, min.y, min.z),
+                new THREE.Vector3(min.x, min.y, max.z),
+                new THREE.Vector3(min.x, max.y, min.z),
+                new THREE.Vector3(min.x, max.y, max.z),
+                new THREE.Vector3(max.x, min.y, min.z),
+                new THREE.Vector3(max.x, min.y, max.z),
+                new THREE.Vector3(max.x, max.y, min.z),
+                new THREE.Vector3(max.x, max.y, max.z),
+            ];
+
+            let minX = +Infinity, maxX = -Infinity, minY = +Infinity, maxY = -Infinity;
+            const v = new THREE.Vector3();
+
+            const W = overlayCanvas.width;   // device pixels (已乘 dpr)
+            const H = overlayCanvas.height;
+
+            const toPxX = xNdc => (xNdc * 0.5 + 0.5) * W;
+            const toPxY = yNdc => (1 - (yNdc * 0.5 + 0.5)) * H;
+
+            for (const p of corners) {
+                v.copy(p).project(camera);
+                if (v.x < minX) minX = v.x;
+                if (v.x > maxX) maxX = v.x;
+                if (v.y < minY) minY = v.y;
+                if (v.y > maxY) maxY = v.y;
+            }
+
+            const x0 = toPxX(minX), x1 = toPxX(maxX);
+            const y0 = toPxY(maxY), y1 = toPxY(minY);
+
+            const rect = { x: x0, y: y0, w: (x1 - x0), h: (y1 - y0) };
+            const wh = rect.w / rect.h;
+            return { rect, wh };
+        }
+
+        // ⭐ 关键：把相机 zoom 调到让“屏幕上 AABB 宽度 = targetPx”
+        function fitCameraAABBWidthPx({ box3, camera, overlayCanvas, targetPx, clamp = [0.1, 1000] }) {
+            // figure out the canvas CSS->device pixel scale
+            const dpr = overlayCanvas.width / overlayCanvas.clientWidth || window.devicePixelRatio || 1;
+
+            // targetPx is in CSS px; convert to canvas/device px to match measurement units
+            const targetPx_device = targetPx * dpr;
+
+            // 1) measure current width in the SAME units as measuredAABB returns
+            const m1 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
+            const w1 = m1.rect.w;               // this is in canvas/device px
+
+            if (w1 <= 0 || !isFinite(w1)) return false;
+
+            // 2) scale zoom
+            const s = targetPx_device / w1;     // both device px
+            const newZoom = THREE.MathUtils.clamp(camera.zoom * s, clamp[0], clamp[1]);
+            if (!isFinite(newZoom) || newZoom <= 0) return false;
+
+            camera.zoom = newZoom;
+            camera.updateProjectionMatrix();
+
+            // 3) re-measure
+            const m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
+            return m2; // { rect, wh } still in device px
+        }
+
+
+
+        function applyAndSolve() {
+            const t = parseRatio(AABBParams.targetRatio);
+            const yaw = AABBParams.yaw;
+            const pitch = AABBParams.pitch;
+            if (!isFinite(t) || t <= 0) {
+                msg.innerHTML = '<span class="err">比例无效。</span>';
+                return;
+            }
+            mesh.rotation.set(deg2rad(pitch), deg2rad(yaw), 0, 'XYZ');
+            mesh.updateMatrixWorld(true);
+            const R = getAbsR01(mesh);
+            const {
+                hx,
+                A,
+                B,
+                denom
+            } = solveHxForWH(t, R);
+            denOut.textContent = denom.toFixed(9);
+            const EPS = 1e-10;
+            if (Math.abs(denom) < EPS) {
+                const WH_noWidth = A / B;
+                const rel = Math.abs(WH_noWidth - t) / t;
+                hxOut.textContent = '（任意）';
+                widthOut.textContent = '（任意）';
+                whOut.textContent = WH_noWidth.toFixed(9);
+                err1Out.textContent = (rel * 100).toFixed(6) + '%';
+                if (rel < 5e-3) {
+                    msg.innerHTML = '<span class="ok">分母≈0，但该姿态本来就满足目标，无需改宽。</span>';
+                } else {
+                    msg.innerHTML = '<span class="warn">分母≈0 且本姿态无法通过改宽达到此比例，请换个旋转。</span>';
+                }
+                mesh.scale.set(1, 1, 1);
+                mesh.updateMatrixWorld(true);
+            } else {
+                if (!(isFinite(hx) && hx > 0)) {
+                    if (info) { info.setText('Error: Cannot achieve the target ratio. Try a different angle.'); info.setType('err'); }
+                    return;
+                }
+                const width = 2 * hx;
+                mesh.scale.set(hx / 2, 1, 1);
+                mesh.updateMatrixWorld(true);
+                const wh_formula = recomputeWH_byFormula(hx, R);
+                const err1 = Math.abs(wh_formula - t) / t;
+                hxOut.textContent = hx.toFixed(9);
+                widthOut.textContent = width.toFixed(9);
+                whOut.textContent = wh_formula.toFixed(9);
+                err1Out.textContent = (err1 * 100).toFixed(6) + '%';
+                const ok = err1 < 5e-3;
+                if (info) {
+                    info.setText(ok
+                        ? 'Success'
+                        : '公式回算误差 > 0.5%，请检查旋转/取值。');
+                    info.setType(ok ? 'ok' : 'warn'); // 你的 addLabel 提供的类型：ok / warn / err
+                }
+            }
+            rebuildStrips();
+            mesh.updateMatrixWorld(true);
+            worldBox.setFromObject(mesh);
+            boxHelper.box.copy(worldBox);
+            boxHelper.updateMatrixWorld(true);
+
+            const measuredAfter = fitCameraAABBWidthPx({
+                box3: worldBox,
+                camera,
+                overlayCanvas: overlay,
+                targetPx: TARGET_PX,
+                clamp: [0.1, 5000]
+            });
+            if (measuredAfter) {
+                //drawAABBs(t, measuredAfter.rect);
+                wh2Out.textContent = measuredAfter.wh.toFixed(9);
+                err2Out.textContent = (Math.abs(measuredAfter.wh - t) / t * 100).toFixed(6) + '%';
+            }
+            renderer.render(scene, camera);
+
+            animateRotation({});
+        }
+
+        // ---- animation state ----
+        let _animRAF = null;
+        let _animCancel = null;
+
+        /** Easing（可换任意你喜欢的）：easeInOutCubic */
+        function easeInOutCubic(t) {
+            return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        }
+
+        function easeOutCubic(t) {
+            t = Math.max(0, Math.min(1, t));
+            return 1 - Math.pow(1 - t, 3);
+        }
+
+        function animateRotation({
+            offsetYawDeg = -15,   // 绕世界Y的预偏移
+            offsetPitchDeg = 15,   // 绕世界X的预偏移（你说“加上x旋转”就用这个）
+            onFrame
+        }) {
+            // 取消上一个动画
+            if (AABBParams.animation !== true) return;
+            if (_animCancel) { _animCancel(); _animCancel = null; }
+            if (_animRAF) { cancelAnimationFrame(_animRAF); _animRAF = null; }
+
+            const startTime = performance.now();
+            let stopped = false;
+            _animCancel = () => { stopped = true; };
+
+            // 终点：当前世界姿态（假设此刻就是“可行角度”）
+            const qEnd = poseGroup.getWorldQuaternion(new THREE.Quaternion());
+
+            // 预偏移：先从终点往回旋（世界Y，然后世界X；如你需要相反顺序就调换）
+            const qYawOff = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(offsetYawDeg));
+            const qPitchOff = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), THREE.MathUtils.degToRad(offsetPitchDeg));
+
+            // 起点的“世界四元数” = 偏移 * 终点
+            const qStartWorld = qYawOff.multiply(qPitchOff).multiply(qEnd).normalize();
+
+            // 如果 poseGroup 的父节点是 scene（无旋转），可直接赋值；
+            // 若父节点有旋转，需要把 qStartWorld 转成局部四元数再赋值：
+            if (poseGroup.parent) {
+                const qParentWorld = poseGroup.parent.getWorldQuaternion(new THREE.Quaternion());
+                const qParentInv = qParentWorld.invert();
+                const qStartLocal = qParentInv.multiply(qStartWorld);
+                poseGroup.quaternion.copy(qStartLocal);
+            } else {
+                poseGroup.quaternion.copy(qStartWorld);
+            }
+            poseGroup.updateMatrixWorld(true);
+
+            function frame(now) {
+                if (stopped) return;
+                const t = Math.min(1, (now - startTime) / AABBParams.duration / 1000);
+                const k = easeOutCubic ? easeOutCubic(t) : t;
+
+                // slerp: 起点 → 终点（世界）
+                const qCurWorld = new THREE.Quaternion();
+                THREE.Quaternion.slerp(qStartWorld, qEnd, qCurWorld, k);
+
+                // 写回到本地四元数
+                if (poseGroup.parent) {
+                    const qParentWorld2 = poseGroup.parent.getWorldQuaternion(new THREE.Quaternion());
+                    const qParentInv2 = qParentWorld2.invert();
+                    const qLocal = qParentInv2.multiply(qCurWorld);
+                    poseGroup.quaternion.copy(qLocal);
+                } else {
+                    poseGroup.quaternion.copy(qCurWorld);
+                }
+
+                // 刷新 & 渲染
+                poseGroup.updateMatrixWorld(true);
+                worldBox.setFromObject(poseGroup);
+                boxHelper.box.copy(worldBox);
+                boxHelper.updateMatrixWorld(true);
+                renderer.render(scene, camera);
+
+                if (onFrame) onFrame(k);
+
+                if (t < 1) {
+                    _animRAF = requestAnimationFrame(frame);
+                } else {
+                    _animRAF = null;
+                    _animCancel = null;
+                }
+            }
+
+            _animRAF = requestAnimationFrame(frame);
+        }
+
+        // ====== Tunables ======
+        const TOL = 5e-3;     // 0.5% tolerance for W/H
+        const EPS = 1e-10;    // denom near-zero threshold
+        const MAX_TRIES = 200;
+
+        // Try random rotations until we get a valid one
+        function pickValidRotationAndSolve(t) {
+            for (let i = 0; i < MAX_TRIES; i++) {
+                randomYawPitch();
+
+                // apply rotation
+                mesh.rotation.set(deg2rad(AABBParams.pitch), deg2rad(AABBParams.yaw), 0, 'XYZ');
+                mesh.updateMatrixWorld(true);
+
+                // get |R| entries
+                const R = getAbsR01(mesh);
+
+                // closed-form solve
+                const { hx, A, B, denom } = solveHxForWH(t, R);
+                denOut.textContent = denom.toFixed(9);
+
+                if (Math.abs(denom) < EPS) {
+                    // width doesn't affect ratio here; check if already satisfied
+                    const WH_noWidth = A / B;
+                    const rel = Math.abs(WH_noWidth - t) / t;
+                    if (rel < TOL) {
+                        // Accept without changing width
+                        mesh.scale.set(1, 1, 1);
+                        mesh.updateMatrixWorld(true);
+
+                        // UI outputs
+                        hxOut.textContent = '（任意）';
+                        widthOut.textContent = '（任意）';
+                        whOut.textContent = WH_noWidth.toFixed(9);
+                        err1Out.textContent = (rel * 100).toFixed(6) + '%';
+                        msg.innerHTML = '<span class="ok">分母≈0，但该姿态本来就满足目标，无需改宽。</span>';
+                        return true;
+                    }
+                    // otherwise try another rotation
+                    continue;
+                }
+
+                // Need a positive, finite hx
+                if (!(isFinite(hx) && hx > 0)) {
+                    continue;
+                }
+
+                // apply width (initial half-width = 2 ⇒ scale.x = hx/2)
+                const width = 2 * hx;
+                mesh.scale.set(hx / 2, 1, 1);
+                mesh.updateMatrixWorld(true);
+
+                // check via formula
+                const wh_formula = recomputeWH_byFormula(hx, R);
+                const err1 = Math.abs(wh_formula - t) / t;
+
+                // accept if within tolerance
+                if (err1 < TOL) {
+                    hxOut.textContent = hx.toFixed(9);
+                    widthOut.textContent = width.toFixed(9);
+                    whOut.textContent = wh_formula.toFixed(9);
+                    err1Out.textContent = (err1 * 100).toFixed(6) + '%';
+                    msg.innerHTML = '<span class="ok">OK：公式回算已在 0.5% 内。</span>';
+                    return true;
+                }
+
+                // otherwise keep trying
+            }
+
+            // If we exit the loop, no valid rotation found
+            msg.innerHTML = `<span class="warn">尝试 ${MAX_TRIES} 次仍未命中容差；请调整目标比例或放宽 TOL。</span>`;
+            return false;
+        }
+
+        function randomAndSolve() {
+
+            if (info) {
+                info.setText("Ready");
+                info.setType('idle');
+            }
+
+            const t = parseRatio(AABBParams.targetRatio);
+            if (!isFinite(t) || t <= 0) {
+                msg.innerHTML = '<span class="err">比例无效。</span>';
+                return;
+            }
+
+            // Try until valid
+            const ok = pickValidRotationAndSolve(t);
+            if (!ok) return;
+
+            // === After we have a valid pose+width, continue your pipeline ===
+            rebuildStrips();
+
+            // Update world AABB & helper
+            poseGroup.updateMatrixWorld(true);
+            mesh.updateMatrixWorld(true);
+            worldBox.setFromObject(mesh);
+            boxHelper.box.copy(worldBox);
+            boxHelper.updateMatrixWorld(true);
+
+            // Fit camera so on-screen AABB width is fixed (e.g., 480 px)
+            const measuredAfter = fitCameraAABBWidthPx({
+                box3: worldBox,
+                camera,
+                overlayCanvas: overlay,
+                targetPx: TARGET_PX,
+                clamp: [0.1, 5000]
+            });
+
+            // Redraw overlay boxes
+            if (measuredAfter) {
+                //drawAABBs(t, measuredAfter.rect);
+                wh2Out.textContent = measuredAfter.wh.toFixed(9);
+                err2Out.textContent = (Math.abs(measuredAfter.wh - t) / t * 100).toFixed(6) + '%';
+            }
+
+            renderer.render(scene, camera);
+            animateRotation({});
+        }
+
+        applyAndSolve();
 
         //====================strip functions start====================
 
@@ -87,13 +811,7 @@
             return new THREE.Vector3().fromBufferAttribute(geometry.attributes.position, i).applyMatrix4(mesh.matrixWorld);
         }
 
-        function makeLine(a, b) {
-            const g = new THREE.BufferGeometry().setFromPoints([a, b]);
-            return new THREE.Line(g, matLine);
-        }
-
         // Quad builder with UVs
-
         function makeQuad(p0, p1, p2, p3, material) {
             const g = new THREE.BufferGeometry();
             g.setAttribute(
@@ -136,60 +854,75 @@
         }
 
         // Remove old strips safely
-        function clearStrips() {
-            [strip1, strip2, strip3].forEach((m) => {
-                if (!m) return;
-                scene.remove(m);
-                m.geometry.dispose();
-                // m.material.dispose(); // only if not reusing matWhiteDS
-            });
-            strip1 = strip2 = strip3 = undefined;
+        function ensureKGroup() {
+            if (!kGroup) {
+                kGroup = new THREE.Group();
+                poseGroup.add(kGroup);              // kGroup is a top-level node the animator rotates
+            }
         }
 
-        // Recompute vertices from the current box and rebuild the 3 strips
+        // clear children but keep kGroup (so its rotation is preserved)
+        function clearStrips() {
+            if (!kGroup) return;
+            for (let i = kGroup.children.length - 1; i >= 0; i--) {
+                const m = kGroup.children[i];
+                kGroup.remove(m);
+                m.geometry?.dispose();
+            }
+        }
+
         function rebuildStrips() {
-            if (!cube || !object) return;
+            if (!geo || !mesh) return;
 
-            object.updateMatrixWorld(true);   // important after any resize/scale
-            box.update();
+            ensureKGroup();
 
-            // line 1 (5 -> 7)
-            const vStart1 = worldVertex(cube, 5, object);
-            const vEnd1 = worldVertex(cube, 7, object);
-            const xOffset = new THREE.Vector3(kStroke, 0, 0);
+            mesh.updateMatrixWorld(true);
 
-            // line 2 (your order: index 1 -> midpoint of line1)
-            const vStart2 = worldVertex(cube, 1, object);
+            // --- define all the points explicitly (world space) ---
+            const vStart1 = worldVertex(geo, 5, mesh);
+            const vEnd1 = worldVertex(geo, 7, mesh);
+
+            const vStart2 = worldVertex(geo, 1, mesh);
             const vEnd2 = vStart1.clone().add(vEnd1).multiplyScalar(0.5);
+
             const t = 0.1;
-
             const vStart3 = vEnd2.clone().lerp(vStart2, t);
-            //const vStart3 = vEnd2.clone().lerp(vStart2, t).sub(new THREE.Vector3(0, kStroke, 0));
+            const v2 = worldVertex(geo, 2, mesh);
 
-            // line 3 (vStart3 -> index 2)
-            const v2 = worldVertex(cube, 2, object);
+            // === 关键改动：用“局部轴 → 世界方向”的偏移量 ===
+            const qWorld = new THREE.Quaternion();
+            mesh.getWorldQuaternion(qWorld);
 
-            // offsets
-            const yOffsetNeg = new THREE.Vector3(0, -kStroke, 0);
-            const yOffsetPos = new THREE.Vector3(0, kStroke, 0);
+            // 局部 X、Y 轴旋转到世界（都是单位方向）
+            const ex = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld); // mesh 的 X 轴（世界方向）
+            const ey = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld); // mesh 的 Y 轴（世界方向）
 
+            // 乘上标量得到世界偏移向量（不会被 mesh.scale 放大/缩小）
+            const xOffset = ex.clone().multiplyScalar(boxParams.kStroke);
+            const yOffsetPos = ey.clone().multiplyScalar(boxParams.kStroke);
+            const yOffsetNeg = ey.clone().multiplyScalar(-boxParams.kStroke);
+
+            // --- rebuild the three strips inside kGroup ---
             clearStrips();
 
-            strip1 = makeStrip(vStart1, vEnd1, xOffset, matWhiteDS);
-            strip2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS);
-            //strip3 = makeStrip(v2, vStart3, yOffsetPos, matWhiteDS);
-            strip3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS);
-            addOutline(strip1);
-            addOutline(strip2);
-            addOutline(strip3);
+            const s1 = makeStrip(vStart1, vEnd1, xOffset, matWhiteDS);  // ← 现在跟着 mesh 的 X 轴走
+            const s2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS);  // ← 跟着 mesh 的 Y 轴走
+            const s3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS);
 
-            scene.add(strip1, strip2, strip3);
+            addOutline(s1); addOutline(s2); addOutline(s3);
 
-            strip2.material.depthWrite = false;
-            strip1.material.depthWrite = false;
-            strip1.renderOrder = 0;
-            strip2.renderOrder = 1;
+            s1.material.depthWrite = false;
+            s2.material.depthWrite = false;
+            s1.renderOrder = 0;
+            s2.renderOrder = 1;
+
+            kGroup.add(s1, s2, s3);
+
+            strip1 = s1; strip2 = s2; strip3 = s3;
+
+            render();
         }
+
 
         function addOutline(strip, alwaysOnTop = true) {
             const edges = new THREE.EdgesGeometry(strip.geometry, 1); // 1° threshold
@@ -205,148 +938,10 @@
             strip.add(lines); // parent so it follows transforms
             return lines;
         }
-
         //====================strip functions end====================
-
-        //====================box resize functions start====================
-
-        function applyBoxSize() {
-            if (!object) return;
-
-            if (boxParams.mode === 'Scale') {
-                // scale relative to the original dimensions
-                object.scale.set(
-                    boxParams.width / baseDims.w,
-                    boxParams.height / baseDims.h,
-                    boxParams.depth / baseDims.d
-                );
-                object.updateMatrixWorld(true);
-            } else {
-                // rebuild geometry to exact dimensions
-                const newGeo = new THREE.BoxGeometry(boxParams.width, boxParams.height, boxParams.depth);
-                object.geometry.dispose();
-                object.geometry = newGeo;
-                object.scale.set(1, 1, 1); // ensure no leftover scale
-            }
-
-            // keep the helper aligned with the current object bounds
-            box.update();
-            rebuildStrips();
-
-        }
-
-        //====================box resize functions end====================
-
-        function init() {
-
-            camera = new THREE.PerspectiveCamera(33, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.z = 10;
-
-            scene = new THREE.Scene();
-            scene.background = null;
-
-            //renderer = new SVGRenderer();
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setClearColor(0x000000, 0);
-            renderer.setPixelRatio(window.devicePixelRatio);
-
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
-
-            // controls
-
-            controls = new OrbitControls(camera, renderer.domElement);
-            controls.listenToKeyEvents(window); // optional
-
-            //controls.addEventListener( 'change', render ); // call this only in static scenes (i.e., if there is no animation loop)
-
-            controls.enableDamping = true; // an animation loop is required when either damping or auto-rotation are enabled
-            controls.dampingFactor = 0.05;
-
-            controls.screenSpacePanning = false;
-
-            //box
-            cube = new THREE.BoxGeometry(baseDims.w, baseDims.h, baseDims.d);
-            object = new THREE.Mesh(cube, new THREE.MeshBasicMaterial({ color: 0xff0000 }));
-            //scene.add(object);                 
-
-            box = new THREE.BoxHelper(object, params.cStroke);
-            box.matrixAutoUpdate = true;
-            scene.add(box);
-
-
-            rebuildStrips();
-
-            window.addEventListener('resize', onWindowResize);
-
-        }
-
-        //====================camera functions end====================
-
-        // keep your existing perspective camera as the "master"
-        const perspCamera = camera;
-
-        // make an ortho camera that matches what the perspective camera sees at the controls target
-        function makeMatchingOrtho(pcam) {
-            const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
-            const d = pcam.position.distanceTo(controls.target);
-            const halfH = Math.tan(THREE.MathUtils.degToRad(pcam.fov * 0.5)) * d;
-            const halfW = halfH * aspect;
-            const ocam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, pcam.near, pcam.far);
-            ocam.position.copy(pcam.position);
-            ocam.quaternion.copy(pcam.quaternion);
-            ocam.updateProjectionMatrix();
-            return ocam;
-        }
-
-        const orthoCamera = makeMatchingOrtho(perspCamera);
-
-        // keep the ortho frustum in sync with current perspective settings/pose
-        function syncOrthoFrustum() {
-            const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
-            const d = perspCamera.position.distanceTo(controls.target);
-            const halfH = Math.tan(THREE.MathUtils.degToRad(perspCamera.fov * 0.5)) * d;
-            const halfW = halfH * aspect;
-            orthoCamera.left = -halfW;
-            orthoCamera.right = halfW;
-            orthoCamera.top = halfH;
-            orthoCamera.bottom = -halfH;
-            // align pose when switching back/forth
-            if (camera === perspCamera) {
-                orthoCamera.position.copy(perspCamera.position);
-                orthoCamera.quaternion.copy(perspCamera.quaternion);
-            }
-            orthoCamera.near = perspCamera.near;
-            orthoCamera.far = perspCamera.far;
-            orthoCamera.updateProjectionMatrix();
-        }
-
-        // update when orbiting/zooming
-        controls.addEventListener('change', () => {
-            if (camera === perspCamera) {
-                syncOrthoFrustum();
-            } else {
-                // keep persp pose following ortho so switching back is seamless
-                perspCamera.position.copy(orthoCamera.position);
-                perspCamera.quaternion.copy(orthoCamera.quaternion);
-                syncOrthoFrustum();
-            }
-        });
-
-        // update on resize
-        window.addEventListener('resize', () => {
-            const w = window.innerWidth, h = window.innerHeight;
-            renderer.setSize(w, h);
-            perspCamera.aspect = w / h;
-            perspCamera.updateProjectionMatrix();
-            syncOrthoFrustum();
-        });
-
-        //====================camera functions end====================
-
         //====================render functions start====================
 
-        let currentRenderer = 'WebGL (Video Output)'; // or 'SVG'
+        let currentRenderer = 'SVG (SVG Output)'; // or 'SVG'
 
         function createRenderer(kind) {
             if (kind === 'SVG (SVG Output)') {
@@ -354,29 +949,11 @@
                 r.setSize(window.innerWidth, window.innerHeight);
                 return r;
             } else {
-                const r = new THREE.WebGLRenderer({ antialias: true });
+                const r = new THREE.WebGLRenderer({ antialias: true, alpha: true });
                 r.setPixelRatio(window.devicePixelRatio);
                 r.setSize(window.innerWidth, window.innerHeight);
                 return r;
             }
-        }
-
-        function recreateControls() {
-            // stash previous options (if you care to preserve them)
-            const opts = {
-                enableDamping: controls?.enableDamping ?? true,
-                dampingFactor: controls?.dampingFactor ?? 0.05,
-                screenSpacePanning: controls?.screenSpacePanning ?? false,
-                target: controls?.target?.clone() ?? new THREE.Vector3()
-            };
-            controls?.dispose();
-            controls = new OrbitControls(camera, renderer.domElement);
-            controls.listenToKeyEvents(window);
-            controls.enableDamping = opts.enableDamping;
-            controls.dampingFactor = opts.dampingFactor;
-            controls.screenSpacePanning = opts.screenSpacePanning;
-            controls.target.copy(opts.target);
-            controls.update();
         }
 
         function switchRenderer(kind) {
@@ -390,775 +967,144 @@
             }
 
             renderer = createRenderer(kind);
-            container.appendChild(renderer.domElement);
-            recreateControls();
-
+            document.body.appendChild(renderer.domElement);
             currentRenderer = kind;
         }
 
         //====================render functions end====================
 
-        //====================export functions start====================
-        function saveCurrentSVG(target = 'svg', filename = 'scene.svg', includeBG = true) {
-            const svgEl = typeof target === 'string' ? document.querySelector(target) : target;
-            if (!svgEl) { console.warn('SVG not found'); return; }
+        import {
+            getGUI,
+            addColorUI,
+            addStaticUI,
+            addAnimationUI,
+            addExportUI,
+        } from './gui.js';
 
-            // Clone so we can tweak attributes safely
-            const svg = svgEl.cloneNode(true);
-            const ns = 'http://www.w3.org/2000/svg';
-            svg.setAttribute('xmlns', ns);
-            if (!svg.getAttribute('xmlns:xlink')) svg.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
-
-            // Ensure width/height + viewBox are present
-            let w = parseFloat(svg.getAttribute('width'));
-            let h = parseFloat(svg.getAttribute('height'));
-            if (!w || !h) {
-                const r = svgEl.getBoundingClientRect();
-                w = Math.max(1, Math.round(r.width));
-                h = Math.max(1, Math.round(r.height));
-                svg.setAttribute('width', w);
-                svg.setAttribute('height', h);
-            }
-            //if (!svg.getAttribute('viewBox')) svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-
-            // Optional solid background
-            if (includeBG) {
-                const bgColor = getComputedStyle(document.body).backgroundColor || '#000'; // or your scene bg
-                const rect = document.createElementNS(ns, 'rect');
-                rect.setAttribute('x', -String(w)) / 2; rect.setAttribute('y', -String(h) / 2);
-                rect.setAttribute('width', String(w));
-                rect.setAttribute('height', String(h));
-                rect.setAttribute('fill', bgColor);
-                svg.insertBefore(rect, svg.firstChild);
-            }
-
-            // Serialize & download
-            const xml = new XMLSerializer().serializeToString(svg);
-            const data = `<?xml version="1.0" encoding="UTF-8"?>\n${xml}`;
-            const blob = new Blob([data], { type: 'image/svg+xml;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
-        }
-
-        //====================export functions end====================
-
-
-
-        //====================GUI functions start====================
-
-        function addLabel(folder, text) {
-            const o = { _label: '' };
-            const ctrl = folder.add(o, '_label').name(text).disable();
-
-            // make it look like a header/divider
-            const el = ctrl.domElement;
-            const input = el.querySelector('input');
-            if (input) input.style.display = 'none';     // hide the text field
-            el.style.pointerEvents = 'none';             // not clickable
-            el.style.borderTop = '1px solid rgba(255,255,255,0.12)';
-            el.style.marginTop = '6px';
-            el.style.paddingTop = '6px';
-            el.style.opacity = '0.85';
-            return ctrl;
-        }
-        const gui = new GUI({ closeFolders: true });
-
-        const viewUI = { Renderer: 'WebGL (Video Output)' };
-        gui.add(viewUI, 'Renderer', ['WebGL (Video Output)', 'SVG (SVG Output)'])
-            .name('Renderer')
-            .onChange((mode) => switchRenderer(mode));
-
-
-        const camUI = { Projection: 'Perspective' };
-        gui.add(camUI, 'Projection', ['Perspective', 'Orthographic'])
-            .name('Camera')
-            .onChange(mode => {
-                if (mode === 'Perspective') {
-                    // align persp to ortho pose before switching back
-                    perspCamera.position.copy(orthoCamera.position);
-                    perspCamera.quaternion.copy(orthoCamera.quaternion);
-                    camera = perspCamera;
-                } else {
-                    syncOrthoFrustum();
-                    camera = orthoCamera;
-                }
-                controls.object = camera;
-                controls.update();
-            });
-
-        gui.add({ kStroke }, 'kStroke', 0.001, 1, 0.001).name('K Stroke Width').onChange((val) => {
-            kStroke = val;
-            rebuildStrips();
-        });
+        const gui = getGUI();
 
         const ui = { showBoxHelper: true }; // default on
         gui.add(ui, 'showBoxHelper').name('Box Helper').onChange((v) => {
-            if (box) box.visible = v;
-        });
-
-        const colFolder = gui.addFolder('Color');
-
-        colFolder.addColor(params, 'bg').name('Background').onChange((v) => {
-            // if background already exists, just set it; otherwise create it
-            if (scene.background && scene.background.isColor) {
-                scene.background.set(v);
-            } else {
-                scene.background = new THREE.Color(v);
-            }
-        });
-        colFolder.addColor(params, 'cStroke').name('Stroke Color').onChange((v) => {
-            setStrokeColor(v);
-            if (box && box.material && box.material.color) {
-                box.material.color.set(v);
-                box.material.needsUpdate = true; // not required, but safe
-            }
-        });
-        colFolder.open(false);
-
-        const staticFolder = gui.addFolder('Static');
-        addLabel(staticFolder, 'Box Size');
-
-        const boxParams = {
-            mode: 'Scale',       // 'Scale' or 'Rebuild'
-            width: baseDims.w,
-            height: baseDims.h,
-            depth: baseDims.d
-        };
-
-        staticFolder.add(boxParams, 'mode', ['Scale', 'Rebuild']).name('Resize via').onChange(applyBoxSize);
-        staticFolder.add(boxParams, 'width', 1, 10, 0.01).onChange(applyBoxSize);
-        staticFolder.add(boxParams, 'height', 1, 10, 0.01).onChange(applyBoxSize);
-        staticFolder.add(boxParams, 'depth', 1, 10, 0.01).onChange(applyBoxSize);
-        staticFolder.open(false);
-
-        // --- GUI: Static rotation (degrees) ---
-        addLabel(staticFolder, 'Rotation');
-
-        const staticRot = { x: 0, y: 0, z: 0 };   // degrees
-        const rotStep = { step: 0.1 };          // <— make 0.1 user-adjustable
-
-        // create controllers first
-        const xCtrl = staticFolder.add(staticRot, 'x', -180, 180).name('X (°)').onChange(applyStaticRotation);
-        const yCtrl = staticFolder.add(staticRot, 'y', -180, 180).name('Y (°)').onChange(applyStaticRotation);
-        const zCtrl = staticFolder.add(staticRot, 'z', -180, 180).name('Z (°)').onChange(applyStaticRotation);
-
-        // set initial step
-        [xCtrl, yCtrl, zCtrl].forEach(c => c.step(rotStep.step));
-
-        // step size control
-        staticFolder.add(rotStep, 'step', 0.01, 45, 0.01).name('Step (°)').onChange((s) => {
-            [xCtrl, yCtrl, zCtrl].forEach(c => c.step(s));
-        });
-
-        // optional reset
-        staticFolder.add({ reset: () => { staticRot.x = staticRot.y = staticRot.z = 0; applyStaticRotation(); } }, 'reset').name('Reset');
-
-        // apply only when rotation animation is OFF
-        function applyStaticRotation() {
-            if (rotateEnabled) return;
-            const rx = THREE.MathUtils.degToRad(staticRot.x);
-            const ry = THREE.MathUtils.degToRad(staticRot.y);
-            const rz = THREE.MathUtils.degToRad(staticRot.z);
-            scene.traverse((child) => {
-                if (child.parent !== scene) return;
-                child.rotation.set(rx, ry, rz);
-            });
-        }
-
-
-        // ---- GUI: Animation staticFolder (toggle) ----
-
-        const animFolder = gui.addFolder('Animation');
-
-        const rotateUI = { enabled: false, period: 6 }; // default: 8s per turn
-        animFolder.add(rotateUI, 'enabled').name('Rotation').onChange(v => { rotateEnabled = v; });
-        animFolder.add(rotateUI, 'period', 0.1, 60, 0.01).name('Rotation Cycle (s)');
-
-        addLabel(animFolder, 'Stroke');
-        let strokePlayhead = 0;
-        let strokeCycleTime = 0;
-
-        const strokeUI = {
-            auto: false,                // enable/disable automatic animation
-            min: 0.05,                  // minimum stroke width
-            max: 0.2,                   // maximum stroke width
-            period: 2.0,                 // seconds for a full min→max→min cycle
-            delayPause: 3
-        };
-
-        // --- GUI (put under the existing Animation folder if you have it) ---
-        animFolder.add(strokeUI, 'auto').name('Stroke Animation');
-        animFolder.add(strokeUI, 'min', 0.001, 1, 0.001).name('Stroke Min').onChange(() => {
-            if (strokeUI.min > strokeUI.max) [strokeUI.min, strokeUI.max] = [strokeUI.max, strokeUI.min];
-        });
-        animFolder.add(strokeUI, 'max', 0.001, 1, 0.001).name('Stroke Max').onChange(() => {
-            if (strokeUI.min > strokeUI.max) [strokeUI.min, strokeUI.max] = [strokeUI.max, strokeUI.min];
-        });
-        animFolder.add(strokeUI, 'period', 0.1, 20, 0.01).name('Stroke Cycle (s)').onChange(() => strokeCycleTime = 0);
-        animFolder.add(strokeUI, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)').onChange(() => strokeCycleTime = 0);
-
-        // --- helper to set stroke once (used by auto + manual) ---
-        function setStroke(w) {
-            kStroke = w;
-            rebuildStrips();
-        }
-
-        // --- auto box width state ---
-        addLabel(animFolder, 'Box Width');
-        let boxWidthPlayhead = 0;
-        let widthCycleTime = 0;
-        const boxWidthUI = {
-            auto: false,
-            min: 2,   // start from current width
-            max: 6, // tweak in GUI
-            period: 3.0,          // seconds for width min→max→min
-            delayPause: 3
-        };
-
-        // --- GUI (put with your other animation controls) ---
-        const widthAutoCtrl = animFolder.add(boxWidthUI, 'auto').name('Box Width Animation').onChange(() => {
-            widthCycleTime = 0;
-        });
-        animFolder.add(boxWidthUI, 'min', 1, 6, 0.01).name('Width Min').onChange(() => {
-            if (boxWidthUI.min > boxWidthUI.max) [boxWidthUI.min, boxWidthUI.max] = [boxWidthUI.max, boxWidthUI.min];
-        });
-        animFolder.add(boxWidthUI, 'max', 1, 6, 0.01).name('Width Max').onChange(() => {
-            if (boxWidthUI.min > boxWidthUI.max) [boxWidthUI.min, boxWidthUI.max] = [boxWidthUI.max, boxWidthUI.min];
-        });
-        animFolder.add(boxWidthUI, 'period', 0.1, 20, 0.01).name('Width Cycle (s)');
-        animFolder.add(boxWidthUI, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)').onChange(() => strokeCycleTime = 0);
-
-        // helper -> route to your existing size logic
-        function setBoxWidth(w) {
-            boxParams.width = w;
-            applyBoxSize();      // must update object (scale or rebuild), box.update(), and rebuildStrips()
-        }
-
-        // --- auto box HEIGHT state ---
-        addLabel(animFolder, 'Box Height');
-
-        let boxHeightPlayhead = 0;
-        let heightCycleTime = 0;
-        let heightDelayLeft = 3;
-
-        const boxHeightUI = {
-            auto: false,
-            min: 2,        // start from current height
-            max: 6,        // tweak in GUI
-            period: 3.0,   // seconds for height min→max→min
-            delayStart: 0,
-            delayPause: 3
-        };
-
-        // --- GUI ---
-        const heightAutoCtrl = animFolder.add(boxHeightUI, 'auto').name('Box Height Animation');
-
-        animFolder.add(boxHeightUI, 'min', 1, 6, 0.01).name('Height Min').onChange(() => {
-            if (boxHeightUI.min > boxHeightUI.max) [boxHeightUI.min, boxHeightUI.max] = [boxHeightUI.max, boxHeightUI.min];
-        });
-        animFolder.add(boxHeightUI, 'max', 1, 6, 0.01).name('Height Max').onChange(() => {
-            if (boxHeightUI.min > boxHeightUI.max) [boxHeightUI.min, boxHeightUI.max] = [boxHeightUI.max, boxHeightUI.min];
-        });
-        animFolder.add(boxHeightUI, 'period', 0.1, 20, 0.01).name('Height Cycle (s)')
-            .onChange(() => { heightCycleTime = 0; });
-
-        animFolder.add(boxHeightUI, 'delayStart', 0, 10, 0.01).name('Start Delay (s)')
-            .onChange(() => {
-                heightDelayLeft = boxHeightUI.delayStart;
-                console.log('Height start delay set to:', boxHeightUI.delayStart);
-                heightCycleTime = 0;
-            }).hide();
-
-        animFolder.add(boxHeightUI, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)')
-            .onChange(() => { heightCycleTime = 0; });
-
-        const animActions = {
-            startAnimation() {
-                resetAllRotations(0);
-                // Commit any active GUI text inputs
-                if (document.activeElement && document.activeElement.blur) {
-                    document.activeElement.blur();
-                }
-
-                // --- Rotation ---
-                // Use current toggle from GUI; reset phase if enabled
-                rotateEnabled = !!rotateUI.enabled;
-                if (rotateEnabled) playhead = 0;
-
-                // --- Width animation ---
-                // Do NOT force-enable; use current boxWidthUI.auto from GUI
-                if (boxWidthUI.auto) {
-                    widthCycleTime = 0;
-                    if (typeof boxWidthPlayhead !== 'undefined') boxWidthPlayhead = 0; // if you still use it
-                    // optional: snap to min at start of first cycle
-                    // setBoxWidth(boxWidthUI.min);
-                }
-
-                // --- Height animation ---
-                if (boxHeightUI.auto) {
-                    heightCycleTime = 0;
-                    if (typeof boxHeightPlayhead !== 'undefined') boxHeightPlayhead = 0;
-                    // one-time start delay at beginning (if you have delayStart)
-                    if ('delayStart' in boxHeightUI) {
-                        heightDelayLeft = boxHeightUI.delayStart;
-                    } else if ('delayPause' in boxHeightUI) {
-                        // if you only use pause-after-cycle, start immediately
-                        heightDelayLeft = 0;
-                    }
-                    // optional: snap to min at start
-                    // setBoxHeight(boxHeightUI.min);
-                }
-
-                // Ensure the box reflects current size params immediately
-                // (only needed if you allow manual width/height sliders too)
-                applyBoxSize();
-
-                // OPTIONAL: refresh GUI checkboxes if you programmatically changed them
-                if (typeof widthAutoCtrl !== 'undefined') widthAutoCtrl.updateDisplay();
-                if (typeof heightAutoCtrl !== 'undefined') heightAutoCtrl.updateDisplay();
-                // If you have a rotation checkbox controller, refresh it too.
-                if (typeof rotateCtrl !== 'undefined') rotateCtrl.updateDisplay();
-
-                // OPTIONAL: if you wired up recording
-                // if (recUI.record && renderer instanceof THREE.WebGLRenderer) {
-                //   startCanvasRecording(renderer, {
-                //     seconds:  recUI.seconds,
-                //     fps:      recUI.fps,
-                //     filename: recUI.filename
-                //   });
-                // }
-            }
-        };
-
-        // Add the button:
-        animFolder.add(animActions, 'startAnimation').name('Start Animation');
-
-
-        // helper -> route to your existing size logic
-        function setBoxHeight(h) {
-            boxParams.height = h;
-            applyBoxSize();    // must update object, box.update(), and rebuildStrips()
-        }
-
-
-        const expoFolder = gui.addFolder('Export');
-
-        const exportUI = {
-            filename: 'scene.svg',
-            background: true,
-            save: () => saveCurrentSVG(renderer.domElement, exportUI.filename, exportUI.background),
-        };
-
-        addLabel(expoFolder, 'SVG');
-
-        expoFolder.add(exportUI, 'filename').name('SVG Filename');
-        expoFolder.add(exportUI, 'background').name('SVG Background');
-        expoFolder.add(exportUI, 'save').name('Save SVG');
-
-        // --- Recording UI/state ---
-        const recUI = {
-            seconds: 6.0,
-            fps: 60,
-            filename: 'capture.webm'
-        };
-
-        addLabel(expoFolder, 'Video (preview with Start Animation first)');
-
-        // Add to your existing Animation GUI (checkbox + options)
-        expoFolder.add(recUI, 'seconds', 0.5, 30, 0.1).name('Record Seconds');
-        expoFolder.add(recUI, 'fps', 1, 60, 1).name('Record FPS');
-        // optional: filename edit
-        expoFolder.add(recUI, 'filename').name('Record Filename');
-
-        // ----- Canvas recording helper (WebGL only) -----
-        async function startCanvasRecording(renderer, { seconds = 2, fps = 60, filename = 'capture.webm' } = {}) {
-            // Must be a WebGL canvas (SVGRenderer won't work with captureStream)
-            if (!(renderer instanceof THREE.WebGLRenderer)) {
-                console.warn('Recording requires WebGLRenderer.');
-                return;
-            }
-            const canvas = renderer.domElement;
-            if (!canvas.captureStream) {
-                console.warn('captureStream() not supported by this browser.');
-                return;
-            }
-
-            const stream = canvas.captureStream(fps);
-
-            // Pick the best supported MIME type
-            const pickType = (...types) => types.find(t => MediaRecorder.isTypeSupported(t));
-            const mimeType =
-                pickType('video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm') ||
-                (navigator.userAgent.includes('Safari') ? 'video/mp4' : '');
-
-            let recorder;
-            try {
-                recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-            } catch (e) {
-                console.warn('Failed to create MediaRecorder:', e);
-                return;
-            }
-
-            const chunks = [];
-            recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-
-            const stopped = new Promise(resolve => (recorder.onstop = resolve));
-
-            recorder.start(); // start capturing
-            setTimeout(() => { try { recorder.stop(); } catch (_) { } }, (seconds + 0.15) * 1000);
-
-            await stopped;
-
-            const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
-        }
-
-        const recordActions = {
-            startRecord() {
-                // enable both animations
-                boxWidthUI.auto = true;
-                boxHeightUI.auto = true;
-                widthCycleTime = 0;
-                heightCycleTime = 0;
-                if (typeof boxWidthPlayhead !== 'undefined') boxWidthPlayhead = 0;
-                if (typeof boxHeightPlayhead !== 'undefined') boxHeightPlayhead = 0;
-
-                // refresh the GUI checkboxes
-                widthAutoCtrl.updateDisplay();
-                heightAutoCtrl.updateDisplay();
-
-                startCanvasRecording(renderer, {
-                    seconds: recUI.seconds,
-                    fps: recUI.fps,
-                    filename: recUI.filename
-                });
-
-            }
-        };
-
-        expoFolder.add(recordActions, 'startRecord').name('Start Record');
-
-        //====================gui functions end====================
-
-        function onWindowResize() {
-
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-
-            renderer.setSize(window.innerWidth, window.innerHeight);
-
-        }
-
-        let playhead = 0;
-        function animate() {
-            requestAnimationFrame(animate);
-
-            const dt = clock.getDelta();
-
-            if (strokeUI.auto && strokeUI.period > 1e-4) {
-                const cycle = strokeUI.delayPause + strokeUI.period;        // full cycle length
-                strokeCycleTime = (strokeCycleTime + dt) % cycle;           // wrap within cycle
-                if (strokeCycleTime < strokeUI.delayPause) {
-                    // delay segment this cycle → hold at min
-                    setStroke(strokeUI.min);
-                } else {
-                    // animated segment
-                    const u = (strokeCycleTime - strokeUI.delayPause) / strokeUI.period; // 0..1
-                    // smooth ping-pong 0→1→0 over u∈[0,1]
-                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));
-                    setStroke(THREE.MathUtils.lerp(strokeUI.min, strokeUI.max, t));
-                }
-            }
-
-            if (boxWidthUI.auto && boxWidthUI.period > 1e-4) {
-                const cycle = boxWidthUI.period + boxWidthUI.delayPause;   // motion first, then pause
-                widthCycleTime = (widthCycleTime + dt) % cycle;
-
-                if (widthCycleTime < boxWidthUI.period) {
-                    // Animated segment (0..period)
-                    const u = widthCycleTime / boxWidthUI.period;           // 0..1
-                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));        // ping–pong 0..1..0
-                    const w = THREE.MathUtils.lerp(boxWidthUI.min, boxWidthUI.max, t);
-                    if (Math.abs(w - boxParams.width) > 1e-6) setBoxWidth(w);
-                } else {
-                    // Pause segment (after each full cycle)
-                    // Option A: hold at min (ping–pong ends at min anyway)
-                    const w = boxWidthUI.min;
-                    if (Math.abs(w - boxParams.width) > 1e-6) setBoxWidth(w);
-
-                    // Option B (do nothing): comment out the two lines above if you want no changes during pause
-                }
-            }
-
-
-            if (boxHeightUI.auto && boxHeightUI.period > 1e-4) {
-
-                heightDelayLeft = Math.max(0, heightDelayLeft - dt);
-
-                if (heightDelayLeft > 0) return;
-
-                const cycle = boxHeightUI.delayPause + boxHeightUI.period;   // delay + motion
-                heightCycleTime = (heightCycleTime + dt) % cycle;
-
-                if (heightCycleTime < boxHeightUI.delayPause) {
-                    // during delay: hold at min (or do nothing if you prefer)
-                    const h = boxHeightUI.min;
-                    if (Math.abs(h - boxParams.height) > 1e-6) setBoxHeight(h);
-                } else {
-                    const u = (heightCycleTime - boxHeightUI.delayPause) / boxHeightUI.period; // 0..1
-                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u)); // smooth 0..1..0
-                    const h = THREE.MathUtils.lerp(boxHeightUI.min, boxHeightUI.max, t);
-                    if (Math.abs(h - boxParams.height) > 1e-6) setBoxHeight(h);
-                }
-
-            }
-
-            if (rotateEnabled) {
-                playhead += dt;
-
-                const TWO_PI = Math.PI * 2;
-                const omega = (rotateUI.period > 1e-4) ? (TWO_PI / rotateUI.period) : 0;
-
-                let i = 0;
-                scene.traverse((child) => {
-                    if (child.parent !== scene) return; // top-level only
-                    child.rotation.y = i + playhead * omega;
-                });
-            }
-            // else: leave current rotations untouched
-
-
-            controls.update(); // needed if enableDamping = true
+            if (boxHelper) boxHelper.visible = v;
             render();
+        });
+
+        gui.addColor(colorParams, 'cStroke').name('Stroke').onChange(v => {
+            box.material.color.set(v);
+            setStrokeColor(v);
+        });
+        gui.add(boxParams, 'kStroke', 0.001, 1, 0.001).name('Stroke Width').onChange((val) => {
+            rebuildStrips();
+        });
+        gui.add(recParams, 'seconds', 0.5, 30, 0.1).name('Animation Seconds');
+
+        const AABBFolder = gui.addFolder('Settings');
+        targetCtrl = AABBFolder.add(AABBParams, 'targetRatio').name('Target W/H');
+        yawCtrl = AABBFolder.add(AABBParams, 'yaw', -180, 180, 0.01).name('Yaw (°)');
+        pitchCtrl = AABBFolder.add(AABBParams, 'pitch', -180, 180, 0.01).name('Pitch (°)');
+        AABBFolder.add(AABBParams, 'animation').name('Animation');
+        AABBFolder.add(AABBParams, 'duration', 0.1, 2, 0.1).name('Duration (s)');
+        AABBFolder.add(AABBParams, 'applyAndSolve').name('Apply Angles');
+        AABBFolder.add(AABBParams, 'randomAndSolve').name('Random Rotate');
+
+        function addLabel(targetGuiOrFolder, text = '', type = '') {
+            const container = targetGuiOrFolder.domElement.querySelector(':scope .children')
+                || targetGuiOrFolder.domElement; // 顶层 gui 也行
+            const row = document.createElement('div');
+            row.className = `msg ${type}`; // 
+            row.textContent = text;
+            container.appendChild(row);
+            return {
+                setText: (t) => { row.textContent = t; },
+                setType: (t) => {
+                    row.classList.remove('ok', 'err', 'idle');
+                    if (t) row.classList.add(t);
+                },
+                el: row
+            };
+        }
+        info = addLabel(AABBFolder, 'Ready');
+
+        const exportFolder = gui.addFolder('Export');
+
+        const svgFolder = exportFolder.addFolder('SVG');
+        svgFolder.add(svgParams, 'filename').name('SVG Filename');
+        const exportSvgCtrl = svgFolder.add(svgParams, 'save').name('Save SVG');
+
+        const videoFolder = exportFolder.addFolder('Video');
+        videoFolder.add(recParams, 'fps', 1, 60, 1).name('Record FPS');
+        videoFolder.add(recParams, 'filename').name('Record Filename');
+        const exportVideoAnimCtrl = videoFolder.add(comboActions, 'startAnimRecord').name('Start Animation + Record');
+
+        const fileInput = document.getElementById('file');
+        const img = document.getElementById('bg');
+
+        let objectUrl = null;
+
+        const api = {
+            loadImage() {
+                fileInput.click();
+            },
+            clear() {
+                if (objectUrl) {
+                    URL.revokeObjectURL(objectUrl);
+                    objectUrl = null;
+                }
+                img.removeAttribute('src');
+                img.style.width = '';
+                img.style.height = '';
+            },
+            opacity: 0.5
+        };
+
+        const manualFolder = gui.addFolder('Manual');
+        manualFolder.add(api, 'loadImage').name('Upload image…');
+        manualFolder.add(api, 'clear').name('Clear');
+        manualFolder.add(api, 'opacity', 0, 1, 0.1).name('Opacity').onChange(v => {
+            img.style.opacity = v;
+        });
+
+        function reduceRatio(w, h) {
+            const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+            const g = gcd(w, h);
+            return [Math.round(w / g), Math.round(h / g)];
         }
 
-        function resetAllRotations(angle = 0) {
-            let i = 0;
-            scene.traverse((child) => {
-                if (child.parent !== scene) return;
-                child.rotation.set(0, angle, 0);
-                i++;
-            });
-            playhead = 0; // optional: reset phase so next start begins clean
-        }
-
-        function render() {
-
-            renderer.render(scene, camera);
-
-        }
-
-        animate();
-
-
-        // --- one-time CSS to ensure full-viewport body & centered background ---
-        (function ensureBgCSS() {
-            if (document.getElementById('bg-css')) return;
-            const style = document.createElement('style');
-            style.id = 'bg-css';
-            style.textContent = `
-    html, body { height: 100%; margin: 0; }
-    body {
-      width: 100vw; min-height: 100vh;
-      background-repeat: no-repeat;
-      background-position: center center;
-      background-size: auto 80vh; /* height = 80vh, width auto */
-    }
-  `;
-            document.head.appendChild(style);
-        })();
-
-        // --- hidden file input (image only) ---
-        let bgObjectURL = null;
-        const bgInput = document.createElement('input');
-        bgInput.type = 'file';
-        bgInput.accept = 'image/*';
-        bgInput.style.display = 'none';
-        document.body.appendChild(bgInput);
-
-        bgInput.addEventListener('change', (e) => {
-            const file = e.target.files?.[0];
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files[0];
             if (!file) return;
 
-            // revoke previous URL to avoid leaks
-            if (bgObjectURL) {
-                URL.revokeObjectURL(bgObjectURL);
-                bgObjectURL = null;
-            }
-            bgObjectURL = URL.createObjectURL(file);
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            objectUrl = URL.createObjectURL(file);
 
-            // apply as body background
-            document.body.style.backgroundImage = `url("${bgObjectURL}")`;
-            // (size/position/repeat are handled by CSS above)
+            img.onload = () => {
+                const w = img.naturalWidth;
+                const h = img.naturalHeight;
+                const ratio = w / h;
+
+                const [rw, rh] = reduceRatio(w, h);
+                AABBParams.targetRatio = `${rw}:${rh}`;
+                targetCtrl.updateDisplay();
+
+                // Landscape or square → width = 80vw; Portrait → height = 80vh
+                if (ratio >= 1) {
+                    img.style.width = '50vw';
+                    img.style.height = 'auto';
+                } else {
+                    img.style.width = 'auto';
+                    img.style.height = '80vh';
+                }
+
+                TARGET_PX = Math.round(img.getBoundingClientRect().width);
+                console.log("TARGET_PX", TARGET_PX);
+            };
+
+            img.src = objectUrl;
+            img.style.opacity = api.opacity;
+
+            // Allow uploading the same file again if needed
+            fileInput.value = '';
         });
-
-        // --- GUI buttons ---
-        const bgUI = {
-            uploadBackground() { bgInput.click(); },
-            clearBackground() {
-                if (bgObjectURL) { URL.revokeObjectURL(bgObjectURL); bgObjectURL = null; }
-                document.body.style.backgroundImage = 'none';
-            }
-        };
-
-        // Put these wherever you like (e.g., staticFolder or a new "Background" section)
-        addLabel(staticFolder, 'Background Image');
-        staticFolder.add(bgUI, 'uploadBackground').name('Upload Background');
-        staticFolder.add(bgUI, 'clearBackground').name('Clear Background');
-
-
-
-
-
-
-
-        // --- get image aspect from an input file or existing ObjectURL ---
-
-
-
-        // --- get box object-space dims (w,h) with current scale (no rotation) ---
-// --- helpers ---
-// ---------- helpers ----------
-// helpers (same as before)
-function getBoxDimsXYZ(mesh) {
-  const g = mesh.geometry;
-  if (!g.boundingBox) g.computeBoundingBox();
-  const size = new THREE.Vector3().subVectors(g.boundingBox.max, g.boundingBox.min);
-  return { w: size.x * mesh.scale.x, h: size.y * mesh.scale.y, d: size.z * mesh.scale.z };
-}
-function extractAxes(obj) {
-  const rot = new THREE.Matrix4().extractRotation(obj.matrixWorld);
-  const ux = new THREE.Vector3(1,0,0).applyMatrix4(rot).normalize();
-  const vy = new THREE.Vector3(0,1,0).applyMatrix4(rot).normalize();
-  const nz = new THREE.Vector3(0,0,1).applyMatrix4(rot).normalize();
-  return { ux, vy, nz };
-}
-function extractCamAxes(cam) {
-  const rot = new THREE.Matrix4().extractRotation(cam.matrixWorld);
-  const right = new THREE.Vector3(1,0,0).applyMatrix4(rot).normalize();
-  const up    = new THREE.Vector3(0,1,0).applyMatrix4(rot).normalize();
-  return { right, up };
-}
-// width-only solve: (ax*w + bx*h + cx*d) / (ay*w + by*h + cy*d) = R
-function solveForWidth(R, ax, bx, cx, ay, by, cy, h, d) {
-  const constX = bx*h + cx*d;
-  const constY = by*h + cy*d;
-  const denom  = ax - R*ay;
-  const numer  = R*constY - constX;
-  return Math.abs(denom) < 1e-9 ? null : numer / denom;
-}
-
-/** Random-rotate (XYZ) then adjust ONLY width to match target aspect. */
-function matchBoxToAspectRandomWidthOnly(targetAspect) {
-  if (!camera.isOrthographicCamera) {
-    console.warn('Width-only aspect match assumes an orthographic camera.');
-  }
-
-  // 1) random static rotation (deg) & apply
-  rotateEnabled = false;
-  const randDeg = () => (Math.random() * 360 - 180);
-  staticRot.x = randDeg();
-  staticRot.y = randDeg();
-  staticRot.z = randDeg();
-  applyStaticRotation();
-
-  // 2) coefficients for current pose (ortho)
-  object.updateMatrixWorld(true);
-  camera.updateMatrixWorld(true);
-
-  const { h, d }    = getBoxDimsXYZ(object);      // keep these fixed
-  const { ux, vy, nz } = extractAxes(object);
-  const { right, up }  = extractCamAxes(camera);
-
-  const ax = Math.abs(ux.dot(right)), bx = Math.abs(vy.dot(right)), cx = Math.abs(nz.dot(right));
-  const ay = Math.abs(ux.dot(up)),    by = Math.abs(vy.dot(up)),    cy = Math.abs(nz.dot(up));
-
-  // 3) solve for new width
-  let newW = solveForWidth(targetAspect, ax, bx, cx, ay, by, cy, h, d);
-
-  // guardrails
-  if (!(newW > 1e-6)) {
-    console.warn('Aspect match (width-only): no valid solve for this orientation; leaving size unchanged.');
-    return;
-  }
-
-  // 4) apply width only (height/depth unchanged)
-  boxParams.width = newW;
-  applyBoxSize();        // your existing function (updates mesh, helper, strips)
-}
-
-
-
-        // ---------------------
-        // Example wiring with your GUI upload
-        // ---------------------
-// --- hidden file input (image only) ---
-const fileInput = document.createElement('input');
-fileInput.type = 'file';
-fileInput.accept = 'image/*';
-fileInput.style.display = 'none';
-document.body.appendChild(fileInput);
-
-// open picker from GUI
-const aspectActions = { matchFromImage: () => fileInput.click() };
-gui.add(aspectActions, 'matchFromImage').name('Match Box to Image Aspect');
-
-// read aspect ratio from an image file
-function getImageAspectFromFile(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const R = img.naturalWidth / img.naturalHeight;
-      URL.revokeObjectURL(url);
-      resolve(R);
-    };
-    img.onerror = (e) => {
-      URL.revokeObjectURL(url);
-      reject(e);
-    };
-    img.src = url;
-  });
-}
-
-// when user picks an image, random-rotate & size the box to match its aspect
-fileInput.addEventListener('change', async (e) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
-
-  try {
-    const R = await getImageAspectFromFile(file);
-
-    // this routine assumes an orthographic camera (as per your requirement)
-    if (!camera.isOrthographicCamera) {
-      console.warn('matchBoxToAspectRandom assumes an orthographic camera.');
-    }
-
-    // randomize rotation via applyStaticRotation() and size to match aspect
-    matchBoxToAspectRandomWidthOnly(R);
-  } catch (err) {
-    console.warn('Failed to read image aspect:', err);
-  } finally {
-    // let user pick the same file again later
-    e.target.value = '';
-  }
-});
-
-
 
     </script>
 </body>

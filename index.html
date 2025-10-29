@@ -2,40 +2,13 @@
 <html lang="en">
 
 <head>
-    <title>Kunsthaus Zurich Logo Generator</title>
+    <title>Logo Generator — Kunsthaus Zürich</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
-    <style>
-        svg {
-            display: block;
-        }
-
-        .lil-gui {
-            --background-color: #ffffff;
-            --text-color: rgb(0, 0, 0);
-            --widget-color: rgb(0, 0, 0);
-            --number-color: #ffffff;
-            --padding: 2px;
-
-        }
-
-        .lil-gui .title:hover {
-            --title-background-color: rgb(105, 105, 105);
-        }
-
-        .lil-gui .controller.disabled {
-            font-weight: 600;
-        }
-
-        .widget{
---text-color: rgb(255, 255, 255);
-color: #ffffff;
-        }
-    </style>
+    <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-
     <script type="importmap">
 			{
 				"imports": {
@@ -51,37 +24,62 @@ color: #ffffff;
 
         import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        import { GUI } from 'https://unpkg.com/three@0.167.1/examples/jsm/libs/lil-gui.module.min.js';
+        import { saveCurrentSVG, startCanvasRecording } from './export.js';
 
-
-        //THREE.ColorManagement.enabled = false;
-
+        const container = document.body;
         let camera, controls, scene, renderer;
         let cube, object, box;
         let strip1, strip2, strip3;
         let kGroup;
 
+        const clock = new THREE.Clock();
+        let rotPlayhead = 0;
 
-        const container = document.body;
-
-        var kStroke = 0.3;
         const baseDims = { w: 4, h: 2, d: 2 };
 
-        const clock = new THREE.Clock();
+        const boxParams = {
+            kStroke: 0.3,
+            width: baseDims.w,
+            height: baseDims.h,
+            depth: baseDims.d
+        };
 
-        let rotateEnabled = false;
+        function applyBoxSize() {
+            if (!object) return;
 
-        const params = {
-            bg: '#000000', // initial color
+            object.scale.set(
+                boxParams.width / baseDims.w,
+                boxParams.height / baseDims.h,
+                boxParams.depth / baseDims.d
+            );
+            object.updateMatrixWorld(true);
+
+            box.update();
+            rebuildStrips();
+        }
+
+        const rotParams = { x: 0, y: 0, z: 0, step: 0.001, enabled: false, period: 6 };  
+
+        function applyRotation() {
+            const rx = THREE.MathUtils.degToRad(rotParams.x);
+            const ry = THREE.MathUtils.degToRad(rotParams.y);
+            const rz = THREE.MathUtils.degToRad(rotParams.z);
+            scene.traverse((child) => {
+                if (child.parent !== scene) return;
+                child.rotation.set(rx, ry, rz);
+            });
+        }
+
+        const colorParams = {
+            bg: '#000000', 
             cStroke: '#ffffff',
         };
 
-        // any material that should follow cStroke goes here
         const strokeMats = new Set();
 
         function trackStrokeMaterial(mat) {
             // tag & set initial color
-            if (mat && mat.color) mat.color.set(params.cStroke);
+            if (mat && mat.color) mat.color.set(colorParams.cStroke);
             strokeMats.add(mat);
             return mat; // so you can inline it
         }
@@ -96,24 +94,83 @@ color: #ffffff;
                 }
             });
         }
+        
         const matWhiteDS = trackStrokeMaterial(
-            new THREE.MeshBasicMaterial({ color: params.cStroke, side: THREE.DoubleSide })
+            new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide })
         );
         const matLine = trackStrokeMaterial(
-            new THREE.LineBasicMaterial({ color: params.cStroke })
+            new THREE.LineBasicMaterial({ color: colorParams.cStroke })
         );
 
+        let strokePlayhead = 0;
+        let strokeCycleTime = 0;
+
+        const strokeParams = {
+            auto: false,
+            min: 0.05,
+            max: 0.2,
+            period: 3.0,
+            delayPause: 3,
+            delayStart: 0,
+        };
+
+        function setStroke(w) {
+            boxParams.kStroke = w;
+            rebuildStrips();
+        }
+
+        let widthPlayhead = 0;
+        let widthCycleTime = 0;
+
+        const widthParams = {
+            auto: false,
+            min: 2,
+            max: 6,
+            period: 3.0,
+            delayPause: 3,
+            delayStart: 0,
+        };
+
+        function setBoxWidth(w) {
+            boxParams.width = w;
+            applyBoxSize();
+        }
+
+        let heightPlayhead = 0;
+        let heightCycleTime = 0;
+
+        const heightParams = {
+            auto: false,
+            min: 2,
+            max: 6,
+            period: 3.0,
+            delayStart: 0,
+            delayPause: 3
+        };
+
+        function setBoxHeight(h) {
+            boxParams.height = h;
+            applyBoxSize();
+        }
+
+        const svgParams = {
+            filename: 'logo.svg',
+            background: true,
+            save: () => saveCurrentSVG(renderer.domElement, svgParams.filename, svgParams.background),
+        };
+
+        const recParams = {
+            seconds: 6.0,
+            fps: 60,
+            filename: 'capture.webm'
+        };
+        
         init();
 
         //====================strip functions start====================
 
         function worldVertex(geometry, i, mesh) {
             return new THREE.Vector3().fromBufferAttribute(geometry.attributes.position, i).applyMatrix4(mesh.matrixWorld);
-        }
-
-        function makeLine(a, b) {
-            const g = new THREE.BufferGeometry().setFromPoints([a, b]);
-            return new THREE.Line(g, matLine);
         }
 
         // Quad builder with UVs
@@ -189,7 +246,7 @@ color: #ffffff;
             // line 1 (5 -> 7)
             const vStart1 = worldVertex(cube, 5, object);
             const vEnd1 = worldVertex(cube, 7, object);
-            const xOffset = new THREE.Vector3(kStroke, 0, 0);
+            const xOffset = new THREE.Vector3(boxParams.kStroke, 0, 0);
 
             // line 2 (index 1 -> midpoint of line 1)
             const vStart2 = worldVertex(cube, 1, object);
@@ -201,15 +258,15 @@ color: #ffffff;
             const v2 = worldVertex(cube, 2, object);
 
             // offsets
-            const yOffsetNeg = new THREE.Vector3(0, -kStroke, 0);
-            const yOffsetPos = new THREE.Vector3(0, kStroke, 0);
+            const yOffsetNeg = new THREE.Vector3(0, -boxParams.kStroke, 0);
+            const yOffsetPos = new THREE.Vector3(0, boxParams.kStroke, 0);
 
             // --- rebuild the three strips inside kGroup ---
             clearStrips();
 
-            let s1 = makeStrip(vStart1, vEnd1, xOffset, matWhiteDS.clone());
-            let s2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS.clone());
-            let s3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS.clone());
+            let s1 = makeStrip(vStart1, vEnd1, xOffset, matWhiteDS);
+            let s2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS);
+            let s3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS);
 
             addOutline(s1);
             addOutline(s2);
@@ -244,42 +301,13 @@ color: #ffffff;
 
         //====================strip functions end====================
 
-        //====================box resize functions start====================
-
-        function applyBoxSize() {
-            if (!object) return;
-
-            if (boxParams.mode === 'Scale') {
-                // scale relative to the original dimensions
-                object.scale.set(
-                    boxParams.width / baseDims.w,
-                    boxParams.height / baseDims.h,
-                    boxParams.depth / baseDims.d
-                );
-                object.updateMatrixWorld(true);
-            } else {
-                // rebuild geometry to exact dimensions
-                const newGeo = new THREE.BoxGeometry(boxParams.width, boxParams.height, boxParams.depth);
-                object.geometry.dispose();
-                object.geometry = newGeo;
-                object.scale.set(1, 1, 1); // ensure no leftover scale
-            }
-
-            // keep the helper aligned with the current object bounds
-            box.update();
-            rebuildStrips();
-
-        }
-
-        //====================box resize functions end====================
-
         function init() {
 
             camera = new THREE.PerspectiveCamera(33, window.innerWidth / window.innerHeight, 0.1, 100);
             camera.position.z = 10;
 
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(params.bg);
+            scene.background = new THREE.Color(colorParams.bg);
 
             renderer = new SVGRenderer();
             //renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -291,13 +319,12 @@ color: #ffffff;
             // controls
 
             controls = new OrbitControls(camera, renderer.domElement);
-            controls.listenToKeyEvents(window); // optional
-
-            //controls.addEventListener( 'change', render ); // call this only in static scenes (i.e., if there is no animation loop)
+            controls.listenToKeyEvents(window);
 
             controls.enableDamping = true; // an animation loop is required when either damping or auto-rotation are enabled
             controls.dampingFactor = 0.05;
-
+            controls.minDistance = 5;
+            controls.maxDistance = 50;
             controls.screenSpacePanning = false;
 
             //box
@@ -305,10 +332,9 @@ color: #ffffff;
             object = new THREE.Mesh(cube, new THREE.MeshBasicMaterial({ color: 0xff0000 }));
             //scene.add(object);                 
 
-            box = new THREE.BoxHelper(object, params.cStroke);
+            box = new THREE.BoxHelper(object, colorParams.cStroke);
             box.matrixAutoUpdate = true;
             scene.add(box);
-
 
             rebuildStrips();
 
@@ -316,8 +342,7 @@ color: #ffffff;
 
         }
 
-        //====================camera functions end====================
-
+        //====================camera functions start====================
         // keep your existing perspective camera as the "master"
         const perspCamera = camera;
 
@@ -353,6 +378,8 @@ color: #ffffff;
             }
             orthoCamera.near = perspCamera.near;
             orthoCamera.far = perspCamera.far;
+            controls.minZoom = 1;
+            controls.maxZoom = 5.0;
             orthoCamera.updateProjectionMatrix();
         }
 
@@ -366,15 +393,6 @@ color: #ffffff;
                 perspCamera.quaternion.copy(orthoCamera.quaternion);
                 syncOrthoFrustum();
             }
-        });
-
-        // update on resize
-        window.addEventListener('resize', () => {
-            const w = window.innerWidth, h = window.innerHeight;
-            renderer.setSize(w, h);
-            perspCamera.aspect = w / h;
-            perspCamera.updateProjectionMatrix();
-            syncOrthoFrustum();
         });
 
         //====================camera functions end====================
@@ -429,291 +447,27 @@ color: #ffffff;
             recreateControls();
 
             currentRenderer = kind;
+            updateExportButtons(renderer);
         }
 
         //====================render functions end====================
 
         //====================export functions start====================
-        function saveCurrentSVG(target = 'svg', filename = 'scene.svg', includeBG = true) {
-            const svgEl = typeof target === 'string' ? document.querySelector(target) : target;
-            if (!svgEl) { console.warn('SVG not found'); return; }
 
-            // Clone so we can tweak attributes safely
-            const svg = svgEl.cloneNode(true);
-            const ns = 'http://www.w3.org/2000/svg';
-            svg.setAttribute('xmlns', ns);
-            if (!svg.getAttribute('xmlns:xlink')) svg.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
-
-            // Ensure width/height + viewBox are present
-            let w = parseFloat(svg.getAttribute('width'));
-            let h = parseFloat(svg.getAttribute('height'));
-            if (!w || !h) {
-                const r = svgEl.getBoundingClientRect();
-                w = Math.max(1, Math.round(r.width));
-                h = Math.max(1, Math.round(r.height));
-                svg.setAttribute('width', w);
-                svg.setAttribute('height', h);
+        const recordActions = {
+            startRecord() {
+                updateButtonsName("exportVideoCtrl");
+                startCanvasRecording(renderer, {
+                    seconds: recParams.seconds,
+                    fps: recParams.fps,
+                    filename: recParams.filename
+                });
             }
-            //if (!svg.getAttribute('viewBox')) svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-
-            // Optional solid background
-            if (includeBG) {
-                const bgColor = getComputedStyle(document.body).backgroundColor || '#000'; // or your scene bg
-                const rect = document.createElementNS(ns, 'rect');
-                rect.setAttribute('x', -String(w)) / 2; rect.setAttribute('y', -String(h) / 2);
-                rect.setAttribute('width', String(w));
-                rect.setAttribute('height', String(h));
-                rect.setAttribute('fill', bgColor);
-                svg.insertBefore(rect, svg.firstChild);
-            }
-
-            // Serialize & download
-            const xml = new XMLSerializer().serializeToString(svg);
-            const data = `<?xml version="1.0" encoding="UTF-8"?>\n${xml}`;
-            const blob = new Blob([data], { type: 'image/svg+xml;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
-        }
+        };
 
         //====================export functions end====================
 
-
-
-        //====================GUI functions start====================
-
-        function addLabel(folder, text) {
-            const o = { _label: '' };
-            const ctrl = folder.add(o, '_label').name(text).disable();
-
-            // make it look like a header/divider
-            const el = ctrl.domElement;
-            const input = el.querySelector('input');
-            if (input) input.style.display = 'none';     // hide the text field
-            el.style.pointerEvents = 'none';             // not clickable
-            el.style.borderTop = '1px solid rgba(0,0,0,1)';
-            el.style.marginTop = '-1px';
-            el.style.paddingTop = '0px';
-            el.style.opacity = '0.85';
-            return ctrl;
-        }
-        const gui = new GUI({ closeFolders: true }, { injectStyles: false });
-
-        const viewUI = { Renderer: 'SVG (SVG Output)' };
-        gui.add(viewUI, 'Renderer', ['WebGL (Video Output)', 'SVG (SVG Output)'])
-            .name('Renderer')
-            .onChange((mode) => switchRenderer(mode));
-
-
-        const camUI = { Projection: 'Perspective' };
-        gui.add(camUI, 'Projection', ['Perspective', 'Orthographic'])
-            .name('Camera')
-            .onChange(mode => {
-                if (mode === 'Perspective') {
-                    // align persp to ortho pose before switching back
-                    perspCamera.position.copy(orthoCamera.position);
-                    perspCamera.quaternion.copy(orthoCamera.quaternion);
-                    camera = perspCamera;
-                } else {
-                    syncOrthoFrustum();
-                    camera = orthoCamera;
-                }
-                controls.object = camera;
-                controls.update();
-            });
-
-        gui.add({ kStroke }, 'kStroke', 0.001, 1, 0.001).name('K Stroke Width').onChange((val) => {
-            kStroke = val;
-            rebuildStrips();
-        });
-
-        const ui = { showBoxHelper: true }; // default on
-        gui.add(ui, 'showBoxHelper').name('Box Helper').onChange((v) => {
-            if (box) box.visible = v;
-        });
-
-        const colFolder = gui.addFolder('Color');
-
-        colFolder.addColor(params, 'bg').name('Background').onChange((v) => {
-            // if background already exists, just set it; otherwise create it
-            if (scene.background && scene.background.isColor) {
-                scene.background.set(v);
-            } else {
-                scene.background = new THREE.Color(v);
-            }
-        });
-        colFolder.addColor(params, 'cStroke').name('Stroke Color').onChange((v) => {
-            setStrokeColor(v);
-            if (box && box.material && box.material.color) {
-                box.material.color.set(v);
-                box.material.needsUpdate = true; // not required, but safe
-            }
-        });
-        colFolder.open(false);
-
-        const staticFolder = gui.addFolder('Static');
-        addLabel(staticFolder, 'Box Size');
-
-        const boxParams = {
-            mode: 'Scale',       // 'Scale' or 'Rebuild'
-            width: baseDims.w,
-            height: baseDims.h,
-            depth: baseDims.d
-        };
-
-        staticFolder.add(boxParams, 'mode', ['Scale', 'Rebuild']).name('Resize via').onChange(applyBoxSize);
-        staticFolder.add(boxParams, 'width', 0, 10, 0.01).onChange(applyBoxSize);
-        staticFolder.add(boxParams, 'height', 1, 10, 0.01).onChange(applyBoxSize);
-        staticFolder.add(boxParams, 'depth', 1, 10, 0.01).onChange(applyBoxSize);
-        staticFolder.open(true);
-
-        // --- GUI: Static rotation (degrees) ---
-        addLabel(staticFolder, 'Rotation');
-
-        const staticRot = { x: 0, y: 0, z: 0 };   // degrees
-        const rotStep = { step: 0.1 };          // <— make 0.1 user-adjustable
-
-        // create controllers first
-        const xCtrl = staticFolder.add(staticRot, 'x', -180, 180).name('X (°)').onChange(applyStaticRotation);
-        const yCtrl = staticFolder.add(staticRot, 'y', -180, 180).name('Y (°)').onChange(applyStaticRotation);
-        const zCtrl = staticFolder.add(staticRot, 'z', -180, 180).name('Z (°)').onChange(applyStaticRotation);
-
-        // set initial step
-        [xCtrl, yCtrl, zCtrl].forEach(c => c.step(rotStep.step));
-
-        // step size control
-        staticFolder.add(rotStep, 'step', 0.01, 45, 0.01).name('Step (°)').onChange((s) => {
-            [xCtrl, yCtrl, zCtrl].forEach(c => c.step(s));
-        });
-
-        // optional reset
-        staticFolder.add({ reset: () => { staticRot.x = staticRot.y = staticRot.z = 0; applyStaticRotation(); } }, 'reset').name('Reset');
-
-        // apply only when rotation animation is OFF
-        function applyStaticRotation() {
-            if (rotateEnabled) return;
-            const rx = THREE.MathUtils.degToRad(staticRot.x);
-            const ry = THREE.MathUtils.degToRad(staticRot.y);
-            const rz = THREE.MathUtils.degToRad(staticRot.z);
-            scene.traverse((child) => {
-                if (child.parent !== scene) return;
-                child.rotation.set(rx, ry, rz);
-            });
-        }
-
-
-        // ---- GUI: Animation staticFolder (toggle) ----
-
-        const animFolder = gui.addFolder('Animation');
-        animFolder.open(false);
-
-        const rotateUI = { enabled: false, period: 6 }; // default: 8s per turn
-        animFolder.add(rotateUI, 'enabled').name('Rotation').onChange(v => { rotateEnabled = v; });
-        animFolder.add(rotateUI, 'period', 0.1, 60, 0.01).name('Rotation Cycle (s)');
-
-        addLabel(animFolder, 'Stroke');
-        let strokePlayhead = 0;
-        let strokeCycleTime = 0;
-
-        const strokeUI = {
-            auto: false,                // enable/disable automatic animation
-            min: 0.05,                  // minimum stroke width
-            max: 0.2,                   // maximum stroke width
-            period: 2.0,                 // seconds for a full min→max→min cycle
-            delayPause: 3
-        };
-
-        // --- GUI (put under the existing Animation folder if you have it) ---
-        animFolder.add(strokeUI, 'auto').name('Stroke Animation');
-        animFolder.add(strokeUI, 'min', 0.001, 1, 0.001).name('Stroke Min').onChange(() => {
-            if (strokeUI.min > strokeUI.max) [strokeUI.min, strokeUI.max] = [strokeUI.max, strokeUI.min];
-        });
-        animFolder.add(strokeUI, 'max', 0.001, 1, 0.001).name('Stroke Max').onChange(() => {
-            if (strokeUI.min > strokeUI.max) [strokeUI.min, strokeUI.max] = [strokeUI.max, strokeUI.min];
-        });
-        animFolder.add(strokeUI, 'period', 0.1, 20, 0.01).name('Stroke Cycle (s)').onChange(() => strokeCycleTime = 0);
-        animFolder.add(strokeUI, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)').onChange(() => strokeCycleTime = 0);
-
-        // --- helper to set stroke once (used by auto + manual) ---
-        function setStroke(w) {
-            kStroke = w;
-            rebuildStrips();
-        }
-
-        // --- auto box width state ---
-        addLabel(animFolder, 'Box Width');
-        let boxWidthPlayhead = 0;
-        let widthCycleTime = 0;
-        const boxWidthUI = {
-            auto: false,
-            min: 2,   // start from current width
-            max: 6, // tweak in GUI
-            period: 3.0,          // seconds for width min→max→min
-            delayPause: 3
-        };
-
-        // --- GUI (put with your other animation controls) ---
-        const widthAutoCtrl = animFolder.add(boxWidthUI, 'auto').name('Box Width Animation').onChange(() => {
-            widthCycleTime = 0;
-        });
-        animFolder.add(boxWidthUI, 'min', 1, 6, 0.01).name('Width Min').onChange(() => {
-            if (boxWidthUI.min > boxWidthUI.max) [boxWidthUI.min, boxWidthUI.max] = [boxWidthUI.max, boxWidthUI.min];
-        });
-        animFolder.add(boxWidthUI, 'max', 1, 6, 0.01).name('Width Max').onChange(() => {
-            if (boxWidthUI.min > boxWidthUI.max) [boxWidthUI.min, boxWidthUI.max] = [boxWidthUI.max, boxWidthUI.min];
-        });
-        animFolder.add(boxWidthUI, 'period', 0.1, 20, 0.01).name('Width Cycle (s)');
-        animFolder.add(boxWidthUI, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)').onChange(() => strokeCycleTime = 0);
-
-        // helper -> route to your existing size logic
-        function setBoxWidth(w) {
-            boxParams.width = w;
-            applyBoxSize();      // must update object (scale or rebuild), box.update(), and rebuildStrips()
-        }
-
-        // --- auto box HEIGHT state ---
-        addLabel(animFolder, 'Box Height');
-
-        let boxHeightPlayhead = 0;
-        let heightCycleTime = 0;
-        let heightDelayLeft = 3;
-
-        const boxHeightUI = {
-            auto: false,
-            min: 2,        // start from current height
-            max: 6,        // tweak in GUI
-            period: 3.0,   // seconds for height min→max→min
-            delayStart: 0,
-            delayPause: 3
-        };
-
-        // --- GUI ---
-        const heightAutoCtrl = animFolder.add(boxHeightUI, 'auto').name('Box Height Animation');
-
-        animFolder.add(boxHeightUI, 'min', 1, 6, 0.01).name('Height Min').onChange(() => {
-            if (boxHeightUI.min > boxHeightUI.max) [boxHeightUI.min, boxHeightUI.max] = [boxHeightUI.max, boxHeightUI.min];
-        });
-        animFolder.add(boxHeightUI, 'max', 1, 6, 0.01).name('Height Max').onChange(() => {
-            if (boxHeightUI.min > boxHeightUI.max) [boxHeightUI.min, boxHeightUI.max] = [boxHeightUI.max, boxHeightUI.min];
-        });
-        animFolder.add(boxHeightUI, 'period', 0.1, 20, 0.01).name('Height Cycle (s)')
-            .onChange(() => { heightCycleTime = 0; });
-
-        animFolder.add(boxHeightUI, 'delayStart', 0, 10, 0.01).name('Start Delay (s)')
-            .onChange(() => {
-                heightDelayLeft = boxHeightUI.delayStart;
-                console.log('Height start delay set to:', boxHeightUI.delayStart);
-                heightCycleTime = 0;
-            }).hide();
-
-        animFolder.add(boxHeightUI, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)')
-            .onChange(() => { heightCycleTime = 0; });
+        //====================animation functions start====================
 
         const animActions = {
             startAnimation() {
@@ -723,263 +477,126 @@ color: #ffffff;
                     document.activeElement.blur();
                 }
 
-                // --- Rotation ---
-                // Use current toggle from GUI; reset phase if enabled
-                rotateEnabled = !!rotateUI.enabled;
-                if (rotateEnabled) playhead = 0;
-
-                // --- Width animation ---
-                // Do NOT force-enable; use current boxWidthUI.auto from GUI
-                if (boxWidthUI.auto) {
-                    widthCycleTime = 0;
-                    if (typeof boxWidthPlayhead !== 'undefined') boxWidthPlayhead = 0; // if you still use it
-                    // optional: snap to min at start of first cycle
-                    // setBoxWidth(boxWidthUI.min);
-                }
-
-                // --- Height animation ---
-                if (boxHeightUI.auto) {
-                    heightCycleTime = 0;
-                    if (typeof boxHeightPlayhead !== 'undefined') boxHeightPlayhead = 0;
-                    // one-time start delay at beginning (if you have delayStart)
-                    if ('delayStart' in boxHeightUI) {
-                        heightDelayLeft = boxHeightUI.delayStart;
-                    } else if ('delayPause' in boxHeightUI) {
-                        // if you only use pause-after-cycle, start immediately
-                        heightDelayLeft = 0;
-                    }
-                    // optional: snap to min at start
-                    // setBoxHeight(boxHeightUI.min);
-                }
-
-                // Ensure the box reflects current size params immediately
-                // (only needed if you allow manual width/height sliders too)
-                applyBoxSize();
-
-                // OPTIONAL: refresh GUI checkboxes if you programmatically changed them
-                if (typeof widthAutoCtrl !== 'undefined') widthAutoCtrl.updateDisplay();
-                if (typeof heightAutoCtrl !== 'undefined') heightAutoCtrl.updateDisplay();
-                // If you have a rotation checkbox controller, refresh it too.
-                if (typeof rotateCtrl !== 'undefined') rotateCtrl.updateDisplay();
-
-                // OPTIONAL: if you wired up recording
-                // if (recUI.record && renderer instanceof THREE.WebGLRenderer) {
-                //   startCanvasRecording(renderer, {
-                //     seconds:  recUI.seconds,
-                //     fps:      recUI.fps,
-                //     filename: recUI.filename
-                //   });
-                // }
+                resetAnimStroke();
+                resetAnimBoxWidth();
+                resetAnimBoxHeight();
             }
         };
 
-        // Add the button:
-        animFolder.add(animActions, 'startAnimation').name('Start Animation');
-
-
-        // helper -> route to your existing size logic
-        function setBoxHeight(h) {
-            boxParams.height = h;
-            applyBoxSize();    // must update object, box.update(), and rebuildStrips()
-        }
-
-
-        const expoFolder = gui.addFolder('Export');
-
-        const exportUI = {
-            filename: 'scene.svg',
-            background: true,
-            save: () => saveCurrentSVG(renderer.domElement, exportUI.filename, exportUI.background),
-        };
-
-        addLabel(expoFolder, 'SVG');
-
-        expoFolder.add(exportUI, 'filename').name('SVG Filename');
-        expoFolder.add(exportUI, 'background').name('SVG Background');
-        expoFolder.add(exportUI, 'save').name('Save SVG');
-
-        // --- Recording UI/state ---
-        const recUI = {
-            seconds: 6.0,
-            fps: 60,
-            filename: 'capture.webm'
-        };
-
-        addLabel(expoFolder, 'Video (preview with Start Animation first)');
-
-        // Add to your existing Animation GUI (checkbox + options)
-        expoFolder.add(recUI, 'seconds', 0.5, 30, 0.1).name('Record Seconds');
-        expoFolder.add(recUI, 'fps', 1, 60, 1).name('Record FPS');
-        // optional: filename edit
-        expoFolder.add(recUI, 'filename').name('Record Filename');
-
-        // ----- Canvas recording helper (WebGL only) -----
-        async function startCanvasRecording(renderer, { seconds = 2, fps = 60, filename = 'capture.webm' } = {}) {
-            // Must be a WebGL canvas (SVGRenderer won't work with captureStream)
-            if (!(renderer instanceof THREE.WebGLRenderer)) {
-                console.warn('Recording requires WebGLRenderer.');
-                return;
-            }
-            const canvas = renderer.domElement;
-            if (!canvas.captureStream) {
-                console.warn('captureStream() not supported by this browser.');
-                return;
-            }
-
-            const stream = canvas.captureStream(fps);
-
-            // Pick the best supported MIME type
-            const pickType = (...types) => types.find(t => MediaRecorder.isTypeSupported(t));
-            const mimeType =
-                pickType('video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm') ||
-                (navigator.userAgent.includes('Safari') ? 'video/mp4' : '');
-
-            let recorder;
-            try {
-                recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-            } catch (e) {
-                console.warn('Failed to create MediaRecorder:', e);
-                return;
-            }
-
-            const chunks = [];
-            recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-
-            const stopped = new Promise(resolve => (recorder.onstop = resolve));
-
-            recorder.start(); // start capturing
-            setTimeout(() => { try { recorder.stop(); } catch (_) { } }, (seconds + 0.15) * 1000);
-
-            await stopped;
-
-            const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
-        }
-
-        const recordActions = {
-            startRecord() {
-                // enable both animations
-                boxWidthUI.auto = true;
-                boxHeightUI.auto = true;
-                widthCycleTime = 0;
-                heightCycleTime = 0;
-                if (typeof boxWidthPlayhead !== 'undefined') boxWidthPlayhead = 0;
-                if (typeof boxHeightPlayhead !== 'undefined') boxHeightPlayhead = 0;
-
-                // refresh the GUI checkboxes
-                widthAutoCtrl.updateDisplay();
-                heightAutoCtrl.updateDisplay();
-
-                startCanvasRecording(renderer, {
-                    seconds: recUI.seconds,
-                    fps: recUI.fps,
-                    filename: recUI.filename
-                });
-
+        const comboActions = {
+            startAnimRecord() {
+                updateButtonsName("exportVideoAnimCtrl");
+                animActions.startAnimation();
+                recordActions.startRecord();
             }
         };
 
-        expoFolder.add(recordActions, 'startRecord').name('Start Record');
-
-        //====================gui functions end====================
-
-        function onWindowResize() {
-
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-
-            renderer.setSize(window.innerWidth, window.innerHeight);
-
-        }
-
-        let playhead = 0;
         function animate() {
             requestAnimationFrame(animate);
-
             const dt = clock.getDelta();
 
-            if (strokeUI.auto && strokeUI.period > 1e-4) {
-                const cycle = strokeUI.delayPause + strokeUI.period;        // full cycle length
-                strokeCycleTime = (strokeCycleTime + dt) % cycle;           // wrap within cycle
-                if (strokeCycleTime < strokeUI.delayPause) {
-                    // delay segment this cycle → hold at min
-                    setStroke(strokeUI.min);
-                } else {
-                    // animated segment
-                    const u = (strokeCycleTime - strokeUI.delayPause) / strokeUI.period; // 0..1
-                    // smooth ping-pong 0→1→0 over u∈[0,1]
-                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));
-                    setStroke(THREE.MathUtils.lerp(strokeUI.min, strokeUI.max, t));
-                }
-            }
-
-            if (boxWidthUI.auto && boxWidthUI.period > 1e-4) {
-                const cycle = boxWidthUI.period + boxWidthUI.delayPause;   // motion first, then pause
-                widthCycleTime = (widthCycleTime + dt) % cycle;
-
-                if (widthCycleTime < boxWidthUI.period) {
-                    // Animated segment (0..period)
-                    const u = widthCycleTime / boxWidthUI.period;           // 0..1
-                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));        // ping–pong 0..1..0
-                    const w = THREE.MathUtils.lerp(boxWidthUI.min, boxWidthUI.max, t);
-                    if (Math.abs(w - boxParams.width) > 1e-6) setBoxWidth(w);
-                } else {
-                    // Pause segment (after each full cycle)
-                    // Option A: hold at min (ping–pong ends at min anyway)
-                    const w = boxWidthUI.min;
-                    if (Math.abs(w - boxParams.width) > 1e-6) setBoxWidth(w);
-
-                    // Option B (do nothing): comment out the two lines above if you want no changes during pause
-                }
-            }
-
-
-            if (boxHeightUI.auto && boxHeightUI.period > 1e-4) {
-
-                heightDelayLeft = Math.max(0, heightDelayLeft - dt);
-
-                if (heightDelayLeft > 0) return;
-
-                const cycle = boxHeightUI.delayPause + boxHeightUI.period;   // delay + motion
-                heightCycleTime = (heightCycleTime + dt) % cycle;
-
-                if (heightCycleTime < boxHeightUI.delayPause) {
-                    // during delay: hold at min (or do nothing if you prefer)
-                    const h = boxHeightUI.min;
-                    if (Math.abs(h - boxParams.height) > 1e-6) setBoxHeight(h);
-                } else {
-                    const u = (heightCycleTime - boxHeightUI.delayPause) / boxHeightUI.period; // 0..1
-                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u)); // smooth 0..1..0
-                    const h = THREE.MathUtils.lerp(boxHeightUI.min, boxHeightUI.max, t);
-                    if (Math.abs(h - boxParams.height) > 1e-6) setBoxHeight(h);
-                }
-
-            }
-
-            if (rotateEnabled) {
-                playhead += dt;
+            if (rotParams.enabled) {
+                rotPlayhead += dt;
 
                 const TWO_PI = Math.PI * 2;
-                const omega = (rotateUI.period > 1e-4) ? (TWO_PI / rotateUI.period) : 0;
+                const omega = (rotParams.period > 1e-4) ? (TWO_PI / rotParams.period) : 0;
 
                 let i = 0;
                 scene.traverse((child) => {
                     if (child.parent !== scene) return; // top-level only
-                    child.rotation.y = i + playhead * omega;
+                    child.rotation.y = i + rotPlayhead * omega;
                 });
             }
-            // else: leave current rotations untouched
 
+            if (strokeParams.auto && strokeParams.period > 1e-4) {
+                if (strokeParams.delayStart > 0) {
+                    strokeParams.delayStart = Math.max(0, strokeParams.delayStart - dt);
+                    setStroke(strokeParams.min);
+                    controls.update();
+                    render();
+                    return;
+                }
 
-            controls.update(); // needed if enableDamping = true
+                const cycle = strokeParams.period + strokeParams.delayPause; // motion first, then pause
+                strokeCycleTime = (strokeCycleTime + dt) % cycle;
+
+                if (strokeCycleTime < strokeParams.period) {
+                    const u = strokeCycleTime / strokeParams.period;          // 0..1
+                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));          // ping–pong 0..1..0
+                    const s = THREE.MathUtils.lerp(strokeParams.min, strokeParams.max, t);
+                    setStroke(s);
+                } else {
+                    // setStroke(strokeParams.min);
+                }
+            }
+
+            if (widthParams.auto && widthParams.period > 1e-4) {
+                if (widthParams.delayStart > 0) {
+                    widthParams.delayStart = Math.max(0, widthParams.delayStart - dt);
+                    setBoxWidth(widthParams.min);
+                    controls.update();
+                    render();
+                    return;
+                }
+
+                const cycle = widthParams.period + widthParams.delayPause;
+                widthCycleTime = (widthCycleTime + dt) % cycle;
+
+                if (widthCycleTime < widthParams.period) {
+                    const u = widthCycleTime / widthParams.period;
+                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));
+                    const w = THREE.MathUtils.lerp(widthParams.min, widthParams.max, t);
+                    if (Math.abs(w - boxParams.width) > 1e-6) setBoxWidth(w);
+                } else {
+                    const w = widthParams.min;
+                    if (Math.abs(w - boxParams.width) > 1e-6) setBoxWidth(w);
+                }
+            }
+
+            if (heightParams.auto && heightParams.period > 1e-4) {
+
+                if (heightParams.delayStart > 0) {
+                    heightParams.delayStart = Math.max(0, heightParams.delayStart - dt);
+                    setBoxHeight(heightParams.min);
+                    controls.update();
+                    render();
+                    return;
+                }
+
+                // motion first, then pause
+                const cycle = heightParams.period + heightParams.delayPause;
+                heightCycleTime = (heightCycleTime + dt) % cycle;
+
+                if (heightCycleTime < heightParams.period) {
+                    // Animated segment (0..period)
+                    const u = heightCycleTime / heightParams.period;       // 0..1
+                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));      // ping–pong 0..1..0
+                    const h = THREE.MathUtils.lerp(heightParams.min, heightParams.max, t);
+                    if (Math.abs(h - boxParams.height) > 1e-6) setBoxHeight(h);
+                } else {
+                    // Pause segment → hold at min (or do nothing if you prefer)
+                    const h = heightParams.min;
+                    if (Math.abs(h - boxParams.height) > 1e-6) setBoxHeight(h);
+                }
+            }
+
+            controls.update();
             render();
+        }
+
+        function resetAnimStroke() {
+            strokePlayhead = 0;
+            strokeCycleTime = 0;
+        }
+
+        function resetAnimBoxWidth() {
+            widthPlayhead = 0;
+            widthCycleTime = 0;
+        }
+
+        function resetAnimBoxHeight() {
+            heightPlayhead = 0;
+            heightCycleTime = 0;
         }
 
         function resetAllRotations(angle = 0) {
@@ -989,19 +606,95 @@ color: #ffffff;
                 child.rotation.set(0, angle, 0);
                 i++;
             });
-            playhead = 0; // optional: reset phase so next start begins clean
+            rotPlayhead = 0; // optional: reset phase so next start begins clean
         }
 
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        window.addEventListener('resize', () => {
+            const w = window.innerWidth, h = window.innerHeight;
+            renderer.setSize(w, h);
+            perspCamera.aspect = w / h;
+            perspCamera.updateProjectionMatrix();
+            syncOrthoFrustum();
+        });
+
         function render() {
-
             renderer.render(scene, camera);
-
         }
 
         animate();
 
+        //====================animation functions end====================
 
+        //====================GUI functions start====================
 
+        import {
+            getGUI,
+            addRendererUI,
+            addCameraUI,
+            addBoxHelperUI,
+            addColorUI,
+            addStaticUI,
+            addAnimationUI,
+            addExportUI,
+        } from './gui.js';
+
+        const gui = getGUI();
+
+        addRendererUI({ switchRenderer });
+
+        addCameraUI({
+            getCamera: () => camera,
+            setCamera: (cam) => { camera = cam; },
+            perspCamera, orthoCamera, controls, syncOrthoFrustum
+        });
+
+        addBoxHelperUI({
+            box,
+        });
+
+        addColorUI({
+            scene,
+            box,
+            colorParams,
+            setStrokeColor,
+        });
+
+        addStaticUI({
+            rebuildStrips,
+            boxParams,
+            applyBoxSize,
+            rotParams,
+            applyRotation,
+        });
+
+        addAnimationUI({
+            rotParams,
+            strokeParams,
+            resetAnimStroke,
+            widthParams,
+            resetAnimBoxWidth,
+            heightParams,
+            resetAnimBoxHeight,
+            animActions
+        });
+
+        const { updateExportButtons, updateButtonsName } = addExportUI({
+            svgParams,
+            recParams,
+            recordActions,
+            comboActions
+        });
+
+        updateExportButtons(renderer);
+
+        //====================GUI functions end====================
     </script>
 </body>
 

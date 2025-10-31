@@ -57,13 +57,13 @@
         import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
         import { saveCurrentSVG, startCanvasRecording } from './export.js';
-        
+        import { makeAnimator } from './aabbFitAnimator.js';
 
         let kGroup;
         let strip1, strip2, strip3;
         let targetCtrl, yawCtrl, pitchCtrl;
         let info;
-        
+
         let TARGET_W_PX = 600;
 
         const el = id => document.getElementById(id);
@@ -469,221 +469,20 @@
             if (pitchCtrl) pitchCtrl.updateDisplay();
         }
 
-        function fitCameraToBox(box, camera, margin = 1.2) {
-            const size = new THREE.Vector3();
-            box.getSize(size); // 得到包围盒宽高深（世界空间）
 
-            // 只需要考虑 X 和 Y（因为相机朝 Z 看）
-            const boxWidth = size.x;
-            const boxHeight = size.y;
 
-            const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
-            const boxAspect = boxWidth / boxHeight;
-
-            let viewHeight;
-            if (boxAspect > aspect) {
-                // 盒子更扁 → 按宽度适配
-                viewHeight = boxWidth / aspect;
-            } else {
-                // 盒子更高 → 按高度适配
-                viewHeight = boxHeight;
-            }
-            viewHeight *= margin; // 加点 margin，避免顶边
-
-            camera.top = viewHeight / 2;
-            camera.bottom = -viewHeight / 2;
-            camera.left = -viewHeight * aspect / 2;
-            camera.right = viewHeight * aspect / 2;
-            camera.updateProjectionMatrix();
-        }
-
-        // 用 Box3 + 投影到 NDC → 像素，得到屏幕 AABB 宽度（px）
-        function measureAABBWidthPx(box3, camera, overlayCanvas) {
-            const { min, max } = box3;
-            const corners = [
-                new THREE.Vector3(min.x, min.y, min.z),
-                new THREE.Vector3(min.x, min.y, max.z),
-                new THREE.Vector3(min.x, max.y, min.z),
-                new THREE.Vector3(min.x, max.y, max.z),
-                new THREE.Vector3(max.x, min.y, min.z),
-                new THREE.Vector3(max.x, min.y, max.z),
-                new THREE.Vector3(max.x, max.y, min.z),
-                new THREE.Vector3(max.x, max.y, max.z),
-            ];
-            const v = new THREE.Vector3();
-
-            let minX = +Infinity, maxX = -Infinity;
-            for (const p of corners) {
-                v.copy(p).project(camera); // NDC [-1,1]
-                if (v.x < minX) minX = v.x;
-                if (v.x > maxX) maxX = v.x;
-            }
-
-            // NDC → 像素（overlay.width/height 已含 dpr）
-            const Wpx = overlayCanvas.width;
-            const xToPx = xNdc => (xNdc * 0.5 + 0.5) * Wpx;
-            const x0 = xToPx(minX), x1 = xToPx(maxX);
-            return (x1 - x0); // 屏幕 AABB 宽度（像素）
-        }
-
-        // 利用 Box3 + 投影到 overlay，得到屏幕像素矩形（你之前已有的函数）
-        function measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas) {
-            const { min, max } = box3;
-            const corners = [
-                new THREE.Vector3(min.x, min.y, min.z),
-                new THREE.Vector3(min.x, min.y, max.z),
-                new THREE.Vector3(min.x, max.y, min.z),
-                new THREE.Vector3(min.x, max.y, max.z),
-                new THREE.Vector3(max.x, min.y, min.z),
-                new THREE.Vector3(max.x, min.y, max.z),
-                new THREE.Vector3(max.x, max.y, min.z),
-                new THREE.Vector3(max.x, max.y, max.z),
-            ];
-
-            let minX = +Infinity, maxX = -Infinity, minY = +Infinity, maxY = -Infinity;
-            const v = new THREE.Vector3();
-
-            const W = overlayCanvas.width;   // device pixels (已乘 dpr)
-            const H = overlayCanvas.height;
-
-            const toPxX = xNdc => (xNdc * 0.5 + 0.5) * W;
-            const toPxY = yNdc => (1 - (yNdc * 0.5 + 0.5)) * H;
-
-            for (const p of corners) {
-                v.copy(p).project(camera);
-                if (v.x < minX) minX = v.x;
-                if (v.x > maxX) maxX = v.x;
-                if (v.y < minY) minY = v.y;
-                if (v.y > maxY) maxY = v.y;
-            }
-
-            const x0 = toPxX(minX), x1 = toPxX(maxX);
-            const y0 = toPxY(maxY), y1 = toPxY(minY);
-
-            const rect = { x: x0, y: y0, w: (x1 - x0), h: (y1 - y0) };
-            const wh = rect.w / rect.h;
-            return { rect, wh };
-        }
-
-        // // ⭐ 关键：把相机 zoom 调到让“屏幕上 AABB 宽度 = targetPx”
-        // function fitCameraAABBWidthPx({ box3, camera, overlayCanvas, targetPx, clamp = [0.1, 1000] }) {
-        //     // figure out the canvas CSS->device pixel scale
-        //     const dpr = overlayCanvas.width / overlayCanvas.clientWidth || window.devicePixelRatio || 1;
-
-        //     // targetPx is in CSS px; convert to canvas/device px to match measurement units
-        //     const targetPx_device = targetPx * dpr;
-
-        //     // 1) measure current width in the SAME units as measuredAABB returns
-        //     const m1 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
-        //     const w1 = m1.rect.w;               // this is in canvas/device px
-
-        //     if (w1 <= 0 || !isFinite(w1)) return false;
-
-        //     // 2) scale zoom
-        //     const s = targetPx_device / w1;     // both device px
-        //     const newZoom = THREE.MathUtils.clamp(camera.zoom * s, clamp[0], clamp[1]);
-        //     if (!isFinite(newZoom) || newZoom <= 0) return false;
-
-        //     camera.zoom = newZoom;
-        //     camera.updateProjectionMatrix();
-
-        //     // 3) re-measure
-        //     const m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
-        //     return m2; // { rect, wh } still in device px
-        // }
 
         // ⭐ 关键：把相机 zoom 调到让“屏幕上 AABB 宽度 = targetPx”
-        function fitCameraAABBWidthPx({
-            box3, camera, overlayCanvas, targetPx, clamp = [0.1, 1000], apply = true
-        }) {
-            // figure out the canvas CSS->device pixel scale
-            const dpr = overlayCanvas.width / overlayCanvas.clientWidth || window.devicePixelRatio || 1;
-            // CSS px -> device px
-            const targetPx_device = targetPx * dpr;
 
-            // 1) measure current width
-            const m1 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
-            const w1 = m1.rect.w; // device px
-            if (w1 <= 0 || !isFinite(w1)) return false;
 
-            // 2) scale zoom
-            const s = targetPx_device / w1;
-            const newZoom = THREE.MathUtils.clamp(camera.zoom * s, clamp[0], clamp[1]);
-            if (!isFinite(newZoom) || newZoom <= 0) return false;
-
-            let m2;
-            if (apply) {
-                camera.zoom = newZoom;
-                camera.updateProjectionMatrix();
-                m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
-            } else {
-                // 临时应用计算结果，仅用于测量，然后恢复
-                const old = camera.zoom;
-                camera.zoom = newZoom;
-                camera.updateProjectionMatrix();
-                m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
-                camera.zoom = old;
-                camera.updateProjectionMatrix();
-            }
-
-            // 返回最终 zoom，便于外部做动画
-            return Object.assign(m2, { finalZoom: newZoom });
-        }
-
-        function runPoseAndZoomAnimation({
+        const { animateRotation, runPoseAndZoomAnimation, cancel } = makeAnimator({
+            THREE,
+            poseGroup,
             worldBox,
-            camera,
-            overlayCanvas,
-            targetPx,
-            clamp = [0.1, 5000],
-            zoomBehavior = true,  
-            startFactor = 0.5,          // used only for 'animate'
-            zoomEase = (k) => k,        // optional easing for zoom
-            rotationOpts = {}
-        }) {
-            const measured = fitCameraAABBWidthPx({
-                box3: worldBox,
-                camera,
-                overlayCanvas,
-                targetPx,
-                clamp,
-                apply: false
-            });
-
-            // If we can't compute final zoom, just rotate.
-            if (!measured || !isFinite(measured.finalZoom) || measured.finalZoom <= 0) {
-                animateRotation(rotationOpts);
-                return measured;
-            }
-
-            const zEnd = measured.finalZoom;
-
-            if (zoomBehavior === false) {
-                // Immediately set final zoom, then rotate.
-                camera.zoom = zEnd;
-                camera.updateProjectionMatrix();
-                animateRotation(rotationOpts);
-                return measured;
-            }
-
-            // Default: animate zoom from final * startFactor → final
-            const zStart = THREE.MathUtils.clamp(zEnd * startFactor, 1e-6, 1e9);
-            camera.zoom = zStart;
-            camera.updateProjectionMatrix();
-
-            animateRotation({
-                ...rotationOpts,
-                onFrame: (k) => {
-                    const kk = zoomEase ? zoomEase(k) : k;
-                    const z = THREE.MathUtils.lerp(zStart, zEnd, kk);
-                    camera.zoom = z;
-                    camera.updateProjectionMatrix();
-                    rotationOpts.onFrame && rotationOpts.onFrame(k);
-                }
-            });
-
-            return measured;
-        }
+            boxHelper,
+            AABBParams,
+            render: () => renderer.render(scene, camera),
+        });
 
         function applyAndSolve() {
 
@@ -766,95 +565,6 @@
             render();
         }
 
-        // ---- animation state ----
-        let _animRAF = null;
-        let _animCancel = null;
-
-        /** Easing（可换任意你喜欢的）：easeInOutCubic */
-        function easeInOutCubic(t) {
-            return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-        }
-
-        function easeOutCubic(t) {
-            t = Math.max(0, Math.min(1, t));
-            return 1 - Math.pow(1 - t, 3);
-        }
-
-        function animateRotation({
-            offsetYawDeg = -15,   // 绕世界Y的预偏移
-            offsetPitchDeg = 15,   // 绕世界X的预偏移（你说“加上x旋转”就用这个）
-            onFrame
-        }) {
-            // 取消上一个动画
-            if (AABBParams.rotAnimation !== true) return;
-            if (_animCancel) { _animCancel(); _animCancel = null; }
-            if (_animRAF) { cancelAnimationFrame(_animRAF); _animRAF = null; }
-
-            const startTime = performance.now();
-            let stopped = false;
-            _animCancel = () => { stopped = true; };
-
-            // 终点：当前世界姿态（假设此刻就是“可行角度”）
-            const qEnd = poseGroup.getWorldQuaternion(new THREE.Quaternion());
-
-            // 预偏移：先从终点往回旋（世界Y，然后世界X；如你需要相反顺序就调换）
-            const qYawOff = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(offsetYawDeg));
-            const qPitchOff = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), THREE.MathUtils.degToRad(offsetPitchDeg));
-
-            // 起点的“世界四元数” = 偏移 * 终点
-            const qStartWorld = qYawOff.multiply(qPitchOff).multiply(qEnd).normalize();
-
-            // 如果 poseGroup 的父节点是 scene（无旋转），可直接赋值；
-            // 若父节点有旋转，需要把 qStartWorld 转成局部四元数再赋值：
-            if (poseGroup.parent) {
-                const qParentWorld = poseGroup.parent.getWorldQuaternion(new THREE.Quaternion());
-                const qParentInv = qParentWorld.invert();
-                const qStartLocal = qParentInv.multiply(qStartWorld);
-                poseGroup.quaternion.copy(qStartLocal);
-            } else {
-                poseGroup.quaternion.copy(qStartWorld);
-            }
-            poseGroup.updateMatrixWorld(true);
-
-            function frame(now) {
-                if (stopped) return;
-                const t = Math.min(1, (now - startTime) / AABBParams.duration / 1000);
-                const k = easeOutCubic ? easeOutCubic(t) : t;
-
-                // slerp: 起点 → 终点（世界）
-                const qCurWorld = new THREE.Quaternion();
-                THREE.Quaternion.slerp(qStartWorld, qEnd, qCurWorld, k);
-
-                // 写回到本地四元数
-                if (poseGroup.parent) {
-                    const qParentWorld2 = poseGroup.parent.getWorldQuaternion(new THREE.Quaternion());
-                    const qParentInv2 = qParentWorld2.invert();
-                    const qLocal = qParentInv2.multiply(qCurWorld);
-                    poseGroup.quaternion.copy(qLocal);
-                } else {
-                    poseGroup.quaternion.copy(qCurWorld);
-                }
-
-                // 刷新 & 渲染
-                poseGroup.updateMatrixWorld(true);
-                worldBox.setFromObject(poseGroup);
-                boxHelper.box.copy(worldBox);
-                boxHelper.updateMatrixWorld(true);
-                renderer.render(scene, camera);
-
-                if (onFrame) onFrame(k);
-
-                if (t < 1) {
-                    _animRAF = requestAnimationFrame(frame);
-                } else {
-                    _animRAF = null;
-                    _animCancel = null;
-                }
-            }
-
-            _animRAF = requestAnimationFrame(frame);
-        }
-
         // ====== Tunables ======
         const TOL = 5e-3;     // 0.5% tolerance for W/H
         const EPS = 1e-10;    // denom near-zero threshold
@@ -928,6 +638,7 @@
             msg.innerHTML = `<span class="warn">尝试 ${MAX_TRIES} 次仍未命中容差；请调整目标比例或放宽 TOL。</span>`;
             return false;
         }
+
 
         function randomAndSolve() {
 

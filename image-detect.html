@@ -57,6 +57,7 @@
         import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
         import { saveCurrentSVG, startCanvasRecording } from './export.js';
+        
 
         let kGroup;
         let strip1, strip2, strip3;
@@ -135,7 +136,8 @@
             targetRatio: "1:1",
             pitch: 15,
             yaw: 30,
-            animation: true,
+            rotAnimation: true,
+            zoomAnimation: true,
             duration: 1,
             applyAndSolve: applyAndSolve,
             randomAndSolve: randomAndSolve
@@ -634,7 +636,7 @@
             overlayCanvas,
             targetPx,
             clamp = [0.1, 5000],
-            zoomBehavior = 'animate',   // 'animate' | 'snap' 
+            zoomBehavior = true,  
             startFactor = 0.5,          // used only for 'animate'
             zoomEase = (k) => k,        // optional easing for zoom
             rotationOpts = {}
@@ -656,7 +658,7 @@
 
             const zEnd = measured.finalZoom;
 
-            if (zoomBehavior === 'snap') {
+            if (zoomBehavior === false) {
                 // Immediately set final zoom, then rotate.
                 camera.zoom = zEnd;
                 camera.updateProjectionMatrix();
@@ -682,8 +684,6 @@
 
             return measured;
         }
-
-
 
         function applyAndSolve() {
 
@@ -754,10 +754,9 @@
                 targetPx: TARGET_W_PX,
                 startFactor: 0.5,
                 clamp: [0.1, 5000],
-                zoomBehavior: 'animate',
+                zoomBehavior: AABBParams.zoomAnimation,
                 rotationOpts: {}
             });
-
 
             if (measuredAfter) {
                 wh2Out.textContent = measuredAfter.wh.toFixed(9);
@@ -787,7 +786,7 @@
             onFrame
         }) {
             // 取消上一个动画
-            if (AABBParams.animation !== true) return;
+            if (AABBParams.rotAnimation !== true) return;
             if (_animCancel) { _animCancel(); _animCancel = null; }
             if (_animRAF) { cancelAnimationFrame(_animRAF); _animRAF = null; }
 
@@ -965,7 +964,7 @@
                 targetPx: TARGET_W_PX,
                 startFactor: 0.5,
                 clamp: [0.1, 5000],
-                zoomBehavior: 'animate',
+                zoomBehavior: AABBParams.zoomAnimation,
                 rotationOpts: {}
             });
 
@@ -1177,7 +1176,8 @@
         targetCtrl = AABBFolder.add(AABBParams, 'targetRatio').name('Target W/H');
         yawCtrl = AABBFolder.add(AABBParams, 'yaw', -180, 180, 0.01).name('Yaw (°)');
         pitchCtrl = AABBFolder.add(AABBParams, 'pitch', -180, 180, 0.01).name('Pitch (°)');
-        AABBFolder.add(AABBParams, 'animation').name('Animation');
+        AABBFolder.add(AABBParams, 'rotAnimation').name('Rotation Animation');
+        AABBFolder.add(AABBParams, 'zoomAnimation').name('Zoom Animation');
         AABBFolder.add(AABBParams, 'duration', 0.1, 2, 0.1).name('Duration (s)');
         AABBFolder.add(AABBParams, 'applyAndSolve').name('Apply Angles');
         AABBFolder.add(AABBParams, 'randomAndSolve').name('Random Rotate');

@@ -271,52 +271,8 @@
         boxHelper.name = "Box3Helper";
         scene.add(boxHelper);
 
-        class Box3HelperDashed extends THREE.LineSegments {
-
-            constructor(box, color = 0xff0000) {
-                let baseLines = [
-                    new THREE.Vector3(1, 1, 1),
-                    new THREE.Vector3(1, 1, -1),
-                    new THREE.Vector3(1, 1, -1),
-                    new THREE.Vector3(1, -1, -1),
-                    new THREE.Vector3(1, -1, -1),
-                    new THREE.Vector3(1, -1, 1)
-                ]
-                let axis = new THREE.Vector3(0, 1, 0);
-                let pts = [];
-                for (let i = 0; i < 4; i++) {
-                    baseLines.forEach(bl => {
-                        pts.push(bl.clone().applyAxisAngle(axis, Math.PI * 0.5 * i));
-                    })
-                }
-
-                const geometry = new THREE.BufferGeometry().setFromPoints(pts);
-                super(geometry, new THREE.LineDashedMaterial({ color: color, toneMapped: false, dashSize: 0.01, gapSize: 0.02 }));
-
-                this.box = box;
-                this.type = 'Box3HelperDashed';
-                this.geometry.computeBoundingSphere();
-                this.computeLineDistances();
-            }
-
-            updateMatrixWorld(force) {
-                const box = this.box;
-                if (box.isEmpty()) return;
-                box.getCenter(this.position);
-                box.getSize(this.scale);
-                this.scale.multiplyScalar(0.5);
-                super.updateMatrixWorld(force);
-            }
-        }
-
-        let sphere = new THREE.Mesh(new THREE.SphereGeometry(1), new THREE.MeshBasicMaterial({ color: "red", wireframe: true }));
-        let b3 = new THREE.Box3().setFromObject(sphere);
-        let dashedHelper = new Box3HelperDashed(worldBox);
-        //scene.add(dashedHelper);
-
         function render() {
             renderer.render(scene, camera);
-            // setupDashClassOnSvg(renderer.domElement);
         }
 
         window.addEventListener('resize', () => {

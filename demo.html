@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>Logo Generator — Kunsthaus Zürich</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <script type="importmap">
+			{
+				"imports": {
+                    "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js",
+                    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.125.0/examples/jsm/"
+				}
+			}
+		</script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+        class Box3HelperDashed extends THREE.LineSegments {
+
+            constructor(box, color = 0xff0000) {
+
+                let baseLines = [
+                    new THREE.Vector3(1, 1, 1),
+                    new THREE.Vector3(1, 1, -1),
+                    new THREE.Vector3(1, 1, -1),
+                    new THREE.Vector3(1, -1, -1),
+                    new THREE.Vector3(1, -1, -1),
+                    new THREE.Vector3(1, -1, 1)
+                ]
+                let axis = new THREE.Vector3(0, 1, 0);
+                let pts = [];
+                for (let i = 0; i < 4; i++) {
+                    baseLines.forEach(bl => {
+                        pts.push(bl.clone().applyAxisAngle(axis, Math.PI * 0.5 * i));
+                    })
+                }
+
+                const geometry = new THREE.BufferGeometry().setFromPoints(pts);
+
+                super(geometry, new THREE.LineDashedMaterial({ color: color, toneMapped: false, dashSize: 0.2, gapSize: 0.1 }));
+
+                this.box = box;
+
+                this.type = 'Box3HelperDashed';
+
+                this.geometry.computeBoundingSphere();
+                this.computeLineDistances();
+
+            }
+
+            updateMatrixWorld(force) {
+
+                const box = this.box;
+
+                if (box.isEmpty()) return;
+
+                box.getCenter(this.position);
+
+                box.getSize(this.scale);
+
+                this.scale.multiplyScalar(0.5);
+
+                super.updateMatrixWorld(force);
+
+            }
+        }
+
+        let scene = new THREE.Scene();
+        const camera = new THREE.OrthographicCamera(100 / - 2, 100 / 2, 100 / 2, 100 / - 2, 1, 1000);
+
+        let renderer = new SVGRenderer();
+        renderer.setSize(innerWidth, innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+
+        let sphere = new THREE.Mesh(new THREE.SphereGeometry(5), new THREE.MeshBasicMaterial({ color: "red", wireframe: true }));
+        scene.add(sphere);
+        let b3 = new THREE.Box3().setFromObject(sphere);
+        let b3hd = new Box3HelperDashed(b3);
+        scene.add(b3hd);
+
+        renderer.render(scene, camera);
+
+
+    </script>
+</body>

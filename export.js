@@ -46,10 +46,11 @@ export function saveCurrentSVG(target = 'svg', filename = 'logo.svg', includeBG 
 }
 
 
-export async function startCanvasRecording(renderer, { seconds = 2, fps = 60, filename = 'capture.webm' } = {}) {
+export async function startCanvasRecording(renderer, { seconds = 2, fps = 60, filename = 'capture.webm', canvas: recordCanvas = null  } = {}) {
     // Must be a WebGL canvas (SVGRenderer won't work with captureStream)
 
-    const canvas = renderer.domElement;
+    const canvas = recordCanvas ?? renderer.domElement;
+
     if (!canvas.captureStream) {
         console.warn('captureStream() not supported by this browser.');
         return;

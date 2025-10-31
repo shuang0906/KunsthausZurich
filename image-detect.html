@@ -142,22 +142,52 @@
         const svgParams = {
             filename: 'logo.svg',
             background: true,
-            save: () => (switchRenderer("SVG (SVG Output)"), saveCurrentSVG(renderer.domElement, svgParams.filename, svgParams.background), render()),
+            save: () => (switchRenderer("SVG (SVG Output)"), render(), saveCurrentSVG(renderer.domElement, svgParams.filename, svgParams.background)),
         };
 
         const recParams = {
             seconds: AABBParams.duration || 5,
             fps: 60,
             filename: 'capture.webm',
+            matte: '#00ff00'
         };
+
+        function makeCopyCanvas({ matte = recParams.matte } = {}) {
+            const src = renderer.domElement;
+
+            const dst = document.createElement('canvas');
+            dst.width = src.width;
+            dst.height = src.height;
+            Object.assign(dst.style, {
+                position: 'absolute', top: '100vh'
+            });
+            document.body.appendChild(dst);
+
+            const dctx = dst.getContext('2d');
+
+            function frame() {
+                renderer.render(scene, camera);  // draw Three.js
+                dctx.fillStyle = matte;         // matte
+                dctx.fillRect(0, 0, dst.width, dst.height);
+                dctx.drawImage(src, 0, 0);       // copy this frame
+                requestAnimationFrame(frame);
+            }
+            frame();
+
+            return { canvas: dst };
+        }
 
         const recordActions = {
             startRecord() {
-                switchRenderer("webgl");
+                switchRenderer("WebGL (Video Output)");
+
+                const { canvas: copyCanvas } = makeCopyCanvas(); // <— keep reference
+
                 startCanvasRecording(renderer, {
                     seconds: recParams.seconds,
                     fps: recParams.fps,
-                    filename: recParams.filename
+                    filename: recParams.filename,
+                    canvas: copyCanvas                 // <— pass the copy canvas here
                 });
             }
         };
@@ -170,7 +200,7 @@
         };
 
         const overlay = document.getElementById('overlay');
-        let renderer = new SVGRenderer();
+        let renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });//SVGRenderer();
 
         const al = renderer.domElement;
 
@@ -178,7 +208,6 @@
 
         const scene = new THREE.Scene();
         scene.traverse(o => o.layers.enable(0));
-
 
         let lastMeasuredRect = null;
         let lastTargetWH = null;
@@ -232,20 +261,223 @@
         mesh.add(box);
         poseGroup.add(mesh);
 
+
         // 3D 里渲染一个包围盒辅助线（会随 mesh 变化自动更新一次）
         const worldBox = new THREE.Box3().setFromObject(mesh);
-        const boxHelper = new THREE.Box3Helper(worldBox, 0xD4D4D4); // 橙色
-        scene.add(boxHelper);
+        const boxHelper = new THREE.Box3Helper(worldBox, "red"); // 橙色
+        boxHelper.name = "Box3Helper";
+        //scene.add(boxHelper);
 
-        function render() { renderer.render(scene, camera); }
+        class Box3HelperDashed extends THREE.LineSegments {
+
+            constructor(box, color = 0xff0000) {
+                let baseLines = [
+                    new THREE.Vector3(1, 1, 1),
+                    new THREE.Vector3(1, 1, -1),
+                    new THREE.Vector3(1, 1, -1),
+                    new THREE.Vector3(1, -1, -1),
+                    new THREE.Vector3(1, -1, -1),
+                    new THREE.Vector3(1, -1, 1)
+                ]
+                let axis = new THREE.Vector3(0, 1, 0);
+                let pts = [];
+                for (let i = 0; i < 4; i++) {
+                    baseLines.forEach(bl => {
+                        pts.push(bl.clone().applyAxisAngle(axis, Math.PI * 0.5 * i));
+                    })
+                }
+
+                const geometry = new THREE.BufferGeometry().setFromPoints(pts);
+                super(geometry, new THREE.LineDashedMaterial({ color: color, toneMapped: false, dashSize: 0.01, gapSize: 0.02 }));
+
+                this.box = box;
+                this.type = 'Box3HelperDashed';
+                this.geometry.computeBoundingSphere();
+                this.computeLineDistances();
+            }
+
+            updateMatrixWorld(force) {
+                const box = this.box;
+                if (box.isEmpty()) return;
+                box.getCenter(this.position);
+                box.getSize(this.scale);
+                this.scale.multiplyScalar(0.5);
+                super.updateMatrixWorld(force);
+            }
+        }
+
+        let sphere = new THREE.Mesh(new THREE.SphereGeometry(1), new THREE.MeshBasicMaterial({ color: "red", wireframe: true }));
+        let b3 = new THREE.Box3().setFromObject(sphere);
+        let dashedHelper = new Box3HelperDashed(worldBox);
+        //scene.add(dashedHelper);
+
+
+// Build a dashed box helper that only draws edges from front faces (w.r.t. camera)
+function makeVisibleDashedEdges(box, camera, {
+  color = 0x3399ff, dashSize = 0.25, gapSize = 0.15
+} = {}) {
+  // Face normals for an axis-aligned Box3 in world space
+  const faceNormals = {
+    px: new THREE.Vector3( 1, 0, 0), nx: new THREE.Vector3(-1, 0, 0),
+    py: new THREE.Vector3( 0, 1, 0), ny: new THREE.Vector3( 0,-1, 0),
+    pz: new THREE.Vector3( 0, 0, 1), nz: new THREE.Vector3( 0, 0,-1),
+  };
+
+  // Which faces are front-facing?
+  const viewDir = new THREE.Vector3();
+  camera.getWorldDirection(viewDir);               // points from camera toward scene
+  const front = {
+    px: faceNormals.px.dot(viewDir) < 0,
+    nx: faceNormals.nx.dot(viewDir) < 0,
+    py: faceNormals.py.dot(viewDir) < 0,
+    ny: faceNormals.ny.dot(viewDir) < 0,
+    pz: faceNormals.pz.dot(viewDir) < 0,
+    nz: faceNormals.nz.dot(viewDir) < 0,
+  };
+
+  // 8 corners
+  const c = [
+    new THREE.Vector3(box.min.x, box.min.y, box.min.z), // 0
+    new THREE.Vector3(box.max.x, box.min.y, box.min.z), // 1
+    new THREE.Vector3(box.max.x, box.max.y, box.min.z), // 2
+    new THREE.Vector3(box.min.x, box.max.y, box.min.z), // 3
+    new THREE.Vector3(box.min.x, box.min.y, box.max.z), // 4
+    new THREE.Vector3(box.max.x, box.min.y, box.max.z), // 5
+    new THREE.Vector3(box.max.x, box.max.y, box.max.z), // 6
+    new THREE.Vector3(box.min.x, box.max.y, box.max.z), // 7
+  ];
+
+  // Edge list with the two faces that share each edge
+  const edges = [
+    [0,1, ['ny','nz']], [1,2, ['ny','nz']], [2,3, ['ny','nz']], [3,0, ['ny','nz']], // bottom
+    [4,5, ['py','pz']], [5,6, ['py','pz']], [6,7, ['py','pz']], [7,4, ['py','pz']], // top
+    [0,4, ['nx','pz']], [1,5, ['px','pz']], [2,6, ['px','pz']], [3,7, ['nx','pz']], // uprights
+  ];
+
+  const pos = [];
+  for (const [a,b,faces] of edges) {
+    // keep edge if it's part of any front-facing face (silhouette + full front frame)
+    if (faces.some(f => front[f])) {
+      pos.push(c[a].x, c[a].y, c[a].z, c[b].x, c[b].y, c[b].z);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+
+  const mat = new THREE.LineDashedMaterial({ color, dashSize, gapSize, toneMapped:false });
+  const segs = new THREE.LineSegments(geo, mat);
+  segs.computeLineDistances();
+  return segs;
+}
+
+// usage (update each frame if the box or camera moves):
+const segs = makeVisibleDashedEdges(worldBox, camera);
+scene.add(segs);
+
+function update() {
+  worldBox.setFromObject(mesh);
+  scene.remove(segs);
+  const next = makeVisibleDashedEdges(worldBox, camera);
+  scene.add(next);
+}
+
+
+        function normalizeColor(c) {
+            return (c || '').trim().toLowerCase().replace(/\s+/g, '');
+        }
+
+        // true if element explicitly carries that light gray stroke
+        function hasStrokeD4(el) {
+            // match the raw inline style string SVGRenderer writes
+            const inlineStyle = normalizeColor(el.getAttribute('style'));
+            if (inlineStyle.includes('stroke:rgb(212,212,212)') || inlineStyle.includes('stroke:#d4d4d4')) {
+                return true;
+            }
+            // also check explicit attributes / inline style props
+            const attr = normalizeColor(el.getAttribute('stroke'));
+            const st = normalizeColor(el.style?.stroke);
+            return attr === '#d4d4d4' || attr === 'rgb(212,212,212)' || st === '#d4d4d4' || st === 'rgb(212,212,212)';
+        }
+        
+        function render() {
+            renderer.render(scene, camera);
+            setupDashClassOnSvg(renderer.domElement);
+            update();
+        }
+        
 
         window.addEventListener('resize', () => {
             setSize();
             updateCamera();
-            render();
         });
 
-        // also call once on init:
+
+        // --- helpers ---
+function getSvg(root) {
+  return root?.tagName?.toLowerCase() === 'svg'
+    ? root
+    : (root.querySelector && root.querySelector('svg')) || null;
+}
+
+function qualifiesStrokeD4(el) {
+  const attr = (el.getAttribute('stroke') || '').replace(/\s+/g, '').toLowerCase();
+  const st   = (el.style?.stroke || '').replace(/\s+/g, '').toLowerCase();
+  return st   === 'rgb(255,0,0)';
+}
+
+function addDashClassIfQualified(el) {
+  if (!(el instanceof Element)) return;
+  if (!/^(path)$/i.test(el.tagName)) return;
+  if (qualifiesStrokeD4(el)) el.classList.add('dashline');
+}
+
+// Process all current nodes once
+function tagExisting(svg) {
+  svg.querySelectorAll('path, line, polyline, polygon, rect, circle, ellipse')
+     .forEach(addDashClassIfQualified);
+}
+
+// Observe and tag new nodes as the renderer updates the DOM
+function observeAndTag(svg) {
+  const obs = new MutationObserver(mutations => {
+    for (const m of mutations) {
+      // If a subtree was replaced, quickly tag its descendants
+      m.addedNodes.forEach(node => {
+        if (!(node instanceof Element)) return;
+        addDashClassIfQualified(node);
+        node.querySelectorAll?.('path, line, polyline, polygon, rect, circle, ellipse')
+            .forEach(addDashClassIfQualified);
+      });
+    }
+  });
+  obs.observe(svg, { childList: true, subtree: true });
+  return obs;
+}
+
+// Wait until the inner <svg> is present, then set everything up
+function ensureWhenSvgReady(root, fn) {
+  const trySetup = () => {
+    const svg = getSvg(root);
+    if (svg) fn(svg);
+    else requestAnimationFrame(trySetup);
+  };
+  trySetup();
+}
+
+// --- public: call this once after your first svgRenderer.render(...) ---
+function setupDashClassOnSvg(svgRoot /* pass svgRenderer.domElement */) {
+  ensureWhenSvgReady(svgRoot, (svg) => {
+    tagExisting(svg);
+    // keep it current as the renderer re-writes nodes
+    const observer = observeAndTag(svg);
+    // optional: return a cleanup
+    svg.__dashObserver = observer;
+  });
+}
+
+
+
         setSize();
         updateCamera();
 
@@ -516,6 +748,7 @@
 
 
         function applyAndSolve() {
+            
             const t = parseRatio(AABBParams.targetRatio);
             const yaw = AABBParams.yaw;
             const pitch = AABBParams.pitch;
@@ -588,7 +821,8 @@
                 wh2Out.textContent = measuredAfter.wh.toFixed(9);
                 err2Out.textContent = (Math.abs(measuredAfter.wh - t) / t * 100).toFixed(6) + '%';
             }
-            renderer.render(scene, camera);
+
+            render();
 
             animateRotation({});
         }
@@ -799,7 +1033,7 @@
                 err2Out.textContent = (Math.abs(measuredAfter.wh - t) / t * 100).toFixed(6) + '%';
             }
 
-            renderer.render(scene, camera);
+            render();
             animateRotation({});
         }
 
@@ -941,7 +1175,7 @@
         //====================strip functions end====================
         //====================render functions start====================
 
-        let currentRenderer = 'SVG (SVG Output)'; // or 'SVG'
+        let currentRenderer = 'WebGL (Video Output)'; // or 'SVG'
 
         function createRenderer(kind) {
             if (kind === 'SVG (SVG Output)') {
@@ -1032,6 +1266,8 @@
         const exportSvgCtrl = svgFolder.add(svgParams, 'save').name('Save SVG');
 
         const videoFolder = exportFolder.addFolder('Video');
+        videoFolder.addColor(recParams, 'matte').name('Matte Color');
+
         videoFolder.add(recParams, 'fps', 1, 60, 1).name('Record FPS');
         videoFolder.add(recParams, 'filename').name('Record Filename');
         const exportVideoAnimCtrl = videoFolder.add(comboActions, 'startAnimRecord').name('Start Animation + Record');

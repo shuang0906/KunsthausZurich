@@ -62,7 +62,8 @@
         let strip1, strip2, strip3;
         let targetCtrl, yawCtrl, pitchCtrl;
         let info;
-        let TARGET_PX = 400;
+        
+        let TARGET_W_PX = 600;
 
         const el = id => document.getElementById(id);
         function parseRatio(str) {
@@ -310,18 +311,17 @@
         let b3 = new THREE.Box3().setFromObject(sphere);
         let dashedHelper = new Box3HelperDashed(worldBox);
         //scene.add(dashedHelper);
-        
+
         function render() {
             renderer.render(scene, camera);
             // setupDashClassOnSvg(renderer.domElement);
         }
-        
 
         window.addEventListener('resize', () => {
             setSize();
             updateCamera();
+            render();
         });
-
 
         setSize();
         updateCamera();
@@ -563,37 +563,130 @@
             return { rect, wh };
         }
 
+        // // ⭐ 关键：把相机 zoom 调到让“屏幕上 AABB 宽度 = targetPx”
+        // function fitCameraAABBWidthPx({ box3, camera, overlayCanvas, targetPx, clamp = [0.1, 1000] }) {
+        //     // figure out the canvas CSS->device pixel scale
+        //     const dpr = overlayCanvas.width / overlayCanvas.clientWidth || window.devicePixelRatio || 1;
+
+        //     // targetPx is in CSS px; convert to canvas/device px to match measurement units
+        //     const targetPx_device = targetPx * dpr;
+
+        //     // 1) measure current width in the SAME units as measuredAABB returns
+        //     const m1 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
+        //     const w1 = m1.rect.w;               // this is in canvas/device px
+
+        //     if (w1 <= 0 || !isFinite(w1)) return false;
+
+        //     // 2) scale zoom
+        //     const s = targetPx_device / w1;     // both device px
+        //     const newZoom = THREE.MathUtils.clamp(camera.zoom * s, clamp[0], clamp[1]);
+        //     if (!isFinite(newZoom) || newZoom <= 0) return false;
+
+        //     camera.zoom = newZoom;
+        //     camera.updateProjectionMatrix();
+
+        //     // 3) re-measure
+        //     const m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
+        //     return m2; // { rect, wh } still in device px
+        // }
+
         // ⭐ 关键：把相机 zoom 调到让“屏幕上 AABB 宽度 = targetPx”
-        function fitCameraAABBWidthPx({ box3, camera, overlayCanvas, targetPx, clamp = [0.1, 1000] }) {
+        function fitCameraAABBWidthPx({
+            box3, camera, overlayCanvas, targetPx, clamp = [0.1, 1000], apply = true
+        }) {
             // figure out the canvas CSS->device pixel scale
             const dpr = overlayCanvas.width / overlayCanvas.clientWidth || window.devicePixelRatio || 1;
-
-            // targetPx is in CSS px; convert to canvas/device px to match measurement units
+            // CSS px -> device px
             const targetPx_device = targetPx * dpr;
 
-            // 1) measure current width in the SAME units as measuredAABB returns
+            // 1) measure current width
             const m1 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
-            const w1 = m1.rect.w;               // this is in canvas/device px
-
+            const w1 = m1.rect.w; // device px
             if (w1 <= 0 || !isFinite(w1)) return false;
 
             // 2) scale zoom
-            const s = targetPx_device / w1;     // both device px
+            const s = targetPx_device / w1;
             const newZoom = THREE.MathUtils.clamp(camera.zoom * s, clamp[0], clamp[1]);
             if (!isFinite(newZoom) || newZoom <= 0) return false;
 
-            camera.zoom = newZoom;
+            let m2;
+            if (apply) {
+                camera.zoom = newZoom;
+                camera.updateProjectionMatrix();
+                m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
+            } else {
+                // 临时应用计算结果，仅用于测量，然后恢复
+                const old = camera.zoom;
+                camera.zoom = newZoom;
+                camera.updateProjectionMatrix();
+                m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
+                camera.zoom = old;
+                camera.updateProjectionMatrix();
+            }
+
+            // 返回最终 zoom，便于外部做动画
+            return Object.assign(m2, { finalZoom: newZoom });
+        }
+
+        function runPoseAndZoomAnimation({
+            worldBox,
+            camera,
+            overlayCanvas,
+            targetPx,
+            clamp = [0.1, 5000],
+            zoomBehavior = 'animate',   // 'animate' | 'snap' 
+            startFactor = 0.5,          // used only for 'animate'
+            zoomEase = (k) => k,        // optional easing for zoom
+            rotationOpts = {}
+        }) {
+            const measured = fitCameraAABBWidthPx({
+                box3: worldBox,
+                camera,
+                overlayCanvas,
+                targetPx,
+                clamp,
+                apply: false
+            });
+
+            // If we can't compute final zoom, just rotate.
+            if (!measured || !isFinite(measured.finalZoom) || measured.finalZoom <= 0) {
+                animateRotation(rotationOpts);
+                return measured;
+            }
+
+            const zEnd = measured.finalZoom;
+
+            if (zoomBehavior === 'snap') {
+                // Immediately set final zoom, then rotate.
+                camera.zoom = zEnd;
+                camera.updateProjectionMatrix();
+                animateRotation(rotationOpts);
+                return measured;
+            }
+
+            // Default: animate zoom from final * startFactor → final
+            const zStart = THREE.MathUtils.clamp(zEnd * startFactor, 1e-6, 1e9);
+            camera.zoom = zStart;
             camera.updateProjectionMatrix();
 
-            // 3) re-measure
-            const m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
-            return m2; // { rect, wh } still in device px
+            animateRotation({
+                ...rotationOpts,
+                onFrame: (k) => {
+                    const kk = zoomEase ? zoomEase(k) : k;
+                    const z = THREE.MathUtils.lerp(zStart, zEnd, kk);
+                    camera.zoom = z;
+                    camera.updateProjectionMatrix();
+                    rotationOpts.onFrame && rotationOpts.onFrame(k);
+                }
+            });
+
+            return measured;
         }
 
 
 
         function applyAndSolve() {
-            
+
             const t = parseRatio(AABBParams.targetRatio);
             const yaw = AABBParams.yaw;
             const pitch = AABBParams.pitch;
@@ -654,22 +747,24 @@
             boxHelper.box.copy(worldBox);
             boxHelper.updateMatrixWorld(true);
 
-            const measuredAfter = fitCameraAABBWidthPx({
-                box3: worldBox,
+            const measuredAfter = runPoseAndZoomAnimation({
+                worldBox,
                 camera,
                 overlayCanvas: overlay,
-                targetPx: TARGET_PX,
-                clamp: [0.1, 5000]
+                targetPx: TARGET_W_PX,
+                startFactor: 0.5,
+                clamp: [0.1, 5000],
+                zoomBehavior: 'animate',
+                rotationOpts: {}
             });
+
+
             if (measuredAfter) {
-                //drawAABBs(t, measuredAfter.rect);
                 wh2Out.textContent = measuredAfter.wh.toFixed(9);
                 err2Out.textContent = (Math.abs(measuredAfter.wh - t) / t * 100).toFixed(6) + '%';
             }
 
             render();
-
-            animateRotation({});
         }
 
         // ---- animation state ----
@@ -863,23 +958,24 @@
             boxHelper.updateMatrixWorld(true);
 
             // Fit camera so on-screen AABB width is fixed (e.g., 480 px)
-            const measuredAfter = fitCameraAABBWidthPx({
-                box3: worldBox,
+            const measuredAfter = runPoseAndZoomAnimation({
+                worldBox,
                 camera,
                 overlayCanvas: overlay,
-                targetPx: TARGET_PX,
-                clamp: [0.1, 5000]
+                targetPx: TARGET_W_PX,
+                startFactor: 0.5,
+                clamp: [0.1, 5000],
+                zoomBehavior: 'animate',
+                rotationOpts: {}
             });
 
-            // Redraw overlay boxes
+
             if (measuredAfter) {
-                //drawAABBs(t, measuredAfter.rect);
                 wh2Out.textContent = measuredAfter.wh.toFixed(9);
                 err2Out.textContent = (Math.abs(measuredAfter.wh - t) / t * 100).toFixed(6) + '%';
             }
 
             render();
-            animateRotation({});
         }
 
         applyAndSolve();
@@ -1176,8 +1272,8 @@
                     img.style.height = '80vh';
                 }
 
-                TARGET_PX = Math.round(img.getBoundingClientRect().width);
-                console.log("TARGET_PX", TARGET_PX);
+                TARGET_W_PX = Math.round(img.getBoundingClientRect().width);
+                console.log("TARGET_W_PX", TARGET_W_PX);
             };
 
             img.src = objectUrl;

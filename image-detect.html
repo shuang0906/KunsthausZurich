@@ -642,6 +642,8 @@
 
         function randomAndSolve() {
 
+            
+
             if (info) {
                 info.setText("Ready");
                 info.setType('idle');
@@ -758,6 +760,8 @@
 
         function rebuildStrips() {
             if (!geo || !mesh) return;
+
+            cancel({ snap: 'end' });
 
             ensureKGroup();
 

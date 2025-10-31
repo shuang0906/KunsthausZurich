@@ -92,9 +92,34 @@ export function makeAnimator(ctx) {
   let _animRAF = null;
   let _animCancel = null;
 
-  function cancel() {
+  let _active = /** @type {null | { qEnd: THREE.Quaternion, lastWorld: THREE.Quaternion }} */(null);
+
+  function _applyWorldQuatToLocal(qWorld) {
+    if (poseGroup.parent) {
+      const qParent = poseGroup.parent.getWorldQuaternion(new THREE.Quaternion());
+      const qLocal  = qParent.clone().invert().multiply(qWorld);
+      poseGroup.quaternion.copy(qLocal);
+    } else {
+      poseGroup.quaternion.copy(qWorld);
+    }
+    poseGroup.updateMatrixWorld(true);
+  }
+
+  // Enhanced cancel: stop RAF and snap pose if requested
+  function cancel({ snap = 'none' } = {}) {
     if (_animCancel) { _animCancel(); _animCancel = null; }
-    if (_animRAF) { cancelAnimationFrame(_animRAF); _animRAF = null; }
+    if (_animRAF)    { cancelAnimationFrame(_animRAF); _animRAF = null; }
+
+    if (_active) {
+      if (snap === 'end') {
+        _applyWorldQuatToLocal(_active.qEnd);
+        if (typeof render === 'function') render();
+      } else if (snap === 'current' && _active.lastWorld) {
+        _applyWorldQuatToLocal(_active.lastWorld);
+        if (typeof render === 'function') render();
+      }
+      _active = null;
+    }
   }
 
   function animateRotation({
@@ -103,46 +128,38 @@ export function makeAnimator(ctx) {
     onFrame
   } = {}) {
     if (AABBParams.rotAnimation !== true) return;
-    cancel();
+
+    // Important: snap any prior animation to its END before starting a new one
+    cancel({ snap: 'end' });
 
     const startTime = performance.now();
     let stopped = false;
     _animCancel = () => { stopped = true; };
 
+    // End pose = current world quaternion (the “solved” pose)
     const qEnd = poseGroup.getWorldQuaternion(new THREE.Quaternion());
-    const qYawOff = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(offsetYawDeg));
+    const qYawOff   = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(offsetYawDeg));
     const qPitchOff = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), THREE.MathUtils.degToRad(offsetPitchDeg));
     const qStartWorld = qYawOff.multiply(qPitchOff).multiply(qEnd).normalize();
 
-    if (poseGroup.parent) {
-      const qParentWorld = poseGroup.parent.getWorldQuaternion(new THREE.Quaternion());
-      const qParentInv = qParentWorld.invert();
-      const qStartLocal = qParentInv.multiply(qStartWorld);
-      poseGroup.quaternion.copy(qStartLocal);
-    } else {
-      poseGroup.quaternion.copy(qStartWorld);
-    }
-    poseGroup.updateMatrixWorld(true);
+    // set starting pose
+    _applyWorldQuatToLocal(qStartWorld);
+
+    // record active quats so cancel() can snap correctly
+    _active = { qEnd: qEnd.clone(), lastWorld: qStartWorld.clone() };
 
     function frame(now) {
       if (stopped) return;
 
       const t = Math.min(1, (now - startTime) / (AABBParams.duration * 1000));
-      const k = easeOutCubic ? easeOutCubic(t) : t;
+      const k = (typeof easeOutCubic === 'function') ? easeOutCubic(t) : t;
 
       const qCurWorld = new THREE.Quaternion();
       THREE.Quaternion.slerp(qStartWorld, qEnd, qCurWorld, k);
 
-      if (poseGroup.parent) {
-        const qParentWorld2 = poseGroup.parent.getWorldQuaternion(new THREE.Quaternion());
-        const qParentInv2 = qParentWorld2.invert();
-        const qLocal = qParentInv2.multiply(qCurWorld);
-        poseGroup.quaternion.copy(qLocal);
-      } else {
-        poseGroup.quaternion.copy(qCurWorld);
-      }
+      _applyWorldQuatToLocal(qCurWorld);
+      _active && (_active.lastWorld = qCurWorld.clone());
 
-      poseGroup.updateMatrixWorld(true);
       worldBox.setFromObject(poseGroup);
       boxHelper.box.copy(worldBox);
       boxHelper.updateMatrixWorld(true);
@@ -155,11 +172,13 @@ export function makeAnimator(ctx) {
       } else {
         _animRAF = null;
         _animCancel = null;
+        _active = null; // finished cleanly
       }
     }
 
     _animRAF = requestAnimationFrame(frame);
   }
+
 
   function runPoseAndZoomAnimation({
     worldBox,

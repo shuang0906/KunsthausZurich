@@ -310,30 +310,10 @@
         let b3 = new THREE.Box3().setFromObject(sphere);
         let dashedHelper = new Box3HelperDashed(worldBox);
         //scene.add(dashedHelper);
-
-
-
-
-        function normalizeColor(c) {
-            return (c || '').trim().toLowerCase().replace(/\s+/g, '');
-        }
-
-        // true if element explicitly carries that light gray stroke
-        function hasStrokeD4(el) {
-            // match the raw inline style string SVGRenderer writes
-            const inlineStyle = normalizeColor(el.getAttribute('style'));
-            if (inlineStyle.includes('stroke:rgb(212,212,212)') || inlineStyle.includes('stroke:#d4d4d4')) {
-                return true;
-            }
-            // also check explicit attributes / inline style props
-            const attr = normalizeColor(el.getAttribute('stroke'));
-            const st = normalizeColor(el.style?.stroke);
-            return attr === '#d4d4d4' || attr === 'rgb(212,212,212)' || st === '#d4d4d4' || st === 'rgb(212,212,212)';
-        }
         
         function render() {
             renderer.render(scene, camera);
-            setupDashClassOnSvg(renderer.domElement);
+            // setupDashClassOnSvg(renderer.domElement);
         }
         
 
@@ -341,71 +321,6 @@
             setSize();
             updateCamera();
         });
-
-
-        // --- helpers ---
-function getSvg(root) {
-  return root?.tagName?.toLowerCase() === 'svg'
-    ? root
-    : (root.querySelector && root.querySelector('svg')) || null;
-}
-
-function qualifiesStrokeD4(el) {
-  const attr = (el.getAttribute('stroke') || '').replace(/\s+/g, '').toLowerCase();
-  const st   = (el.style?.stroke || '').replace(/\s+/g, '').toLowerCase();
-  return st   === 'rgb(255,0,0)';
-}
-
-function addDashClassIfQualified(el) {
-  if (!(el instanceof Element)) return;
-  if (!/^(path)$/i.test(el.tagName)) return;
-  if (qualifiesStrokeD4(el)) el.classList.add('dashline');
-}
-
-// Process all current nodes once
-function tagExisting(svg) {
-  svg.querySelectorAll('path, line, polyline, polygon, rect, circle, ellipse')
-     .forEach(addDashClassIfQualified);
-}
-
-// Observe and tag new nodes as the renderer updates the DOM
-function observeAndTag(svg) {
-  const obs = new MutationObserver(mutations => {
-    for (const m of mutations) {
-      // If a subtree was replaced, quickly tag its descendants
-      m.addedNodes.forEach(node => {
-        if (!(node instanceof Element)) return;
-        addDashClassIfQualified(node);
-        node.querySelectorAll?.('path, line, polyline, polygon, rect, circle, ellipse')
-            .forEach(addDashClassIfQualified);
-      });
-    }
-  });
-  obs.observe(svg, { childList: true, subtree: true });
-  return obs;
-}
-
-// Wait until the inner <svg> is present, then set everything up
-function ensureWhenSvgReady(root, fn) {
-  const trySetup = () => {
-    const svg = getSvg(root);
-    if (svg) fn(svg);
-    else requestAnimationFrame(trySetup);
-  };
-  trySetup();
-}
-
-// --- public: call this once after your first svgRenderer.render(...) ---
-function setupDashClassOnSvg(svgRoot /* pass svgRenderer.domElement */) {
-  ensureWhenSvgReady(svgRoot, (svg) => {
-    tagExisting(svg);
-    // keep it current as the renderer re-writes nodes
-    const observer = observeAndTag(svg);
-    // optional: return a cleanup
-    svg.__dashObserver = observer;
-  });
-}
-
 
 
         setSize();

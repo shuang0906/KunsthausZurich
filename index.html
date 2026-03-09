@@ -24,10 +24,11 @@
 
         import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
         import { saveCurrentSVG, startCanvasRecording } from './export.js';
 
         const container = document.body;
-        let camera, controls, scene, renderer;
+        let camera, controls, scene, renderer, labelRenderer;
         let cube, object, box;
         let strip1, strip2, strip3;
         let kGroup;
@@ -71,8 +72,8 @@
         }
 
         const colorParams = {
-            bg: '#000000', 
-            cStroke: '#ffffff',
+            bg: '#ffffff', 
+            cStroke: '#000000',
         };
 
         const strokeMats = new Set();
@@ -168,6 +169,26 @@
         init();
 
         //====================strip functions start====================
+        function worldToScreen(point, camera, renderer) {
+    const p = point.clone().project(camera);
+
+    const width = renderer.domElement.clientWidth;
+    const height = renderer.domElement.clientHeight;
+
+    return {
+        x: (p.x * 0.5 + 0.5) * width,
+        y: (-p.y * 0.5 + 0.5) * height
+    };
+}
+const lineEl = document.createElement('div');
+lineEl.style.position = 'absolute';
+lineEl.style.height = '2px';
+lineEl.style.background = 'red';
+lineEl.style.transformOrigin = '0 50%';
+lineEl.style.pointerEvents = 'none';
+
+// document.body.appendChild(lineEl);
+labelRenderer.domElement.appendChild(lineEl);
 
         function worldVertex(geometry, i, mesh) {
             return new THREE.Vector3().fromBufferAttribute(geometry.attributes.position, i).applyMatrix4(mesh.matrixWorld);
@@ -316,6 +337,11 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
+				labelRenderer = new CSS2DRenderer();
+				labelRenderer.setSize( window.innerWidth, window.innerHeight );
+				labelRenderer.domElement.style.position = 'absolute';
+				labelRenderer.domElement.style.top = '0px';
+				document.body.appendChild( labelRenderer.domElement );
             // controls
 
             controls = new OrbitControls(camera, renderer.domElement);

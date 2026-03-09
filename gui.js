@@ -89,9 +89,9 @@ export function addStaticUI({
     });
 
     const staticBoxSize = staticFolder.addFolder('Box Size');
-    const wCtrl = staticBoxSize.add(boxParams, 'width', 0, 10, 0.001).name('Width').onChange(applyBoxSize);
-    const hCtrl = staticBoxSize.add(boxParams, 'height', 1, 10, 0.001).name('Height').onChange(applyBoxSize);
-    const dCtrl = staticBoxSize.add(boxParams, 'depth', 1, 10, 0.001).name('Depth').onChange(applyBoxSize);
+    const wCtrl = staticBoxSize.add(boxParams, 'width', 2, 6, 0.001).name('Width').onChange(applyBoxSize);
+    const hCtrl = staticBoxSize.add(boxParams, 'height', 2, 5, 0.001).name('Height').onChange(applyBoxSize);
+    const dCtrl = staticBoxSize.add(boxParams, 'depth', 2, 10, 0.001).name('Depth').onChange(applyBoxSize);
     staticFolder.open(false);
 
     const staticRotation = staticFolder.addFolder('Rotation (°)');

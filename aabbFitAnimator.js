@@ -59,35 +59,55 @@ export function makeAnimator(ctx) {
   }
 
   // Compute the zoom needed to fit Box3 to a target on-screen width (CSS px)
-  function fitCameraAABBWidthPx({
-    box3, camera, overlayCanvas, targetPx, clamp = [0.1, 1000], apply = true
-  }) {
-    const dpr = overlayCanvas.width / overlayCanvas.clientWidth || window.devicePixelRatio || 1;
-    const targetPx_device = targetPx * dpr;
+function fitCameraAABBToTarget({
+  box3, camera, overlayCanvas,
+  targetW, targetH,                 // CSS px
+  clamp = [0.1, 1000],
+  apply = true
+}) {
+  const dpr = overlayCanvas.width / overlayCanvas.clientWidth || window.devicePixelRatio || 1;
+  const targetW_device = targetW * dpr;
+  const targetH_device = targetH * dpr;
 
-    const m1 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
-    const w1 = m1.rect.w; // device px
-    if (w1 <= 0 || !isFinite(w1)) return false;
+  // Measure current on-screen AABB (device px)
+  const m1 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
+  const w1 = m1.rect.w, h1 = m1.rect.h;
+  if (!(isFinite(w1) && isFinite(h1)) || w1 <= 0 || h1 <= 0) return false;
 
-    const s = targetPx_device / w1;
-    const newZoom = THREE.MathUtils.clamp(camera.zoom * s, clamp[0], clamp[1]);
-    if (!isFinite(newZoom) || newZoom <= 0) return false;
+  // Decide via AABBParams.targetRatio (W/H)
+  let ratio = AABBParams && AABBParams.targetRatio;
+  // if it's a string like "3:4", use your parseRatio if available:
+  if (typeof ratio === 'string' && typeof parseRatio === 'function') ratio = parseRatio(ratio);
+  ratio = Number(ratio);
 
-    let m2;
-    if (apply) {
-      camera.zoom = newZoom;
-      camera.updateProjectionMatrix();
-      m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
-    } else {
-      const old = camera.zoom;
-      camera.zoom = newZoom;
-      camera.updateProjectionMatrix();
-      m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
-      camera.zoom = old;
-      camera.updateProjectionMatrix();
-    }
-    return Object.assign(m2, { finalZoom: newZoom });
+  // portrait or 1:1 => fit HEIGHT; landscape => fit WIDTH
+  const useHeight = (isFinite(ratio) && ratio > 0) ? (ratio <= 1) : (w1 <= h1);
+
+  const s = useHeight ? (targetH_device / h1) : (targetW_device / w1);
+  const newZoom = THREE.MathUtils.clamp(camera.zoom * s, clamp[0], clamp[1]);
+  if (!isFinite(newZoom) || newZoom <= 0) return false;
+
+  let m2;
+  if (apply) {
+    camera.zoom = newZoom;
+    camera.updateProjectionMatrix();
+    m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
+  } else {
+    const old = camera.zoom;
+    camera.zoom = newZoom;
+    camera.updateProjectionMatrix();
+    m2 = measuredAABB_fromBox3_toOverlay(box3, camera, overlayCanvas);
+    camera.zoom = old;
+    camera.updateProjectionMatrix();
   }
+
+  return Object.assign(m2, {
+    finalZoom: newZoom,
+    fitBy: useHeight ? 'height' : 'width'
+  });
+}
+
+
 
   let _animRAF = null;
   let _animCancel = null;
@@ -184,18 +204,20 @@ export function makeAnimator(ctx) {
     worldBox,
     camera,
     overlayCanvas,
-    targetPx,
+    targetW,
+    targetH,
     clamp = [0.1, 5000],
     zoomBehavior = true,
     startFactor = 0.5,
     zoomEase = (k) => k,
     rotationOpts = {}
   }) {
-    const measured = fitCameraAABBWidthPx({
+    const measured = fitCameraAABBToTarget({
       box3: worldBox,
       camera,
       overlayCanvas,
-      targetPx,
+      targetW,
+      targetH,
       clamp,
       apply: false
     });

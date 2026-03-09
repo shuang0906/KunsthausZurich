@@ -64,8 +64,6 @@
         let targetCtrl, yawCtrl, pitchCtrl;
         let info;
 
-        let TARGET_W_PX = 600;
-
         const el = id => document.getElementById(id);
         function parseRatio(str) {
             str = String(str).trim();
@@ -136,6 +134,8 @@
             targetRatio: "1:1",
             pitch: 15,
             yaw: 30,
+            targetW: 400,
+            targetH: 400,
             rotAnimation: true,
             zoomAnimation: true,
             duration: 1,
@@ -264,11 +264,8 @@
         mesh.add(box);
         poseGroup.add(mesh);
 
-
-        // 3D 里渲染一个包围盒辅助线（会随 mesh 变化自动更新一次）
         const worldBox = new THREE.Box3().setFromObject(mesh);
-        const boxHelper = new THREE.Box3Helper(worldBox, "red"); // 橙色
-        boxHelper.name = "Box3Helper";
+        const boxHelper = new THREE.Box3Helper(worldBox, 0x00ff00); // 橙色
         scene.add(boxHelper);
 
         function render() {
@@ -384,15 +381,17 @@
 
         function randomV() {
             const ranges = [
-                { min: -170, max: -100 },
-                { min: -80, max: -10 },
-                { min: 10, max: 80 },
-                { min: 100, max: 170 },
+                { min: -30, max: -10 },
+                { min: 10, max: 30 },
+                // { min: -170, max: -100 },
+                // { min: -80, max: -10 },
+                // { min: 10, max: 80 },
+                // { min: 100, max: 170 },
             ];
             const specials = [0, 90, 180];
 
-            const wRange = 0.90 / ranges.length;    // 0.225 each
-            const wSpec = 0.10 / specials.length;  // ~0.03333 each
+            const wRange = 0.95 / ranges.length;    // 0.225 each
+            const wSpec = 0.05 / specials.length;  // ~0.03333 each
 
             const buckets = [
                 ...ranges.map(r => ({ type: 'range', r, w: wRange })),
@@ -424,8 +423,6 @@
             if (yawCtrl) yawCtrl.updateDisplay();
             if (pitchCtrl) pitchCtrl.updateDisplay();
         }
-
-
 
 
         // ⭐ 关键：把相机 zoom 调到让“屏幕上 AABB 宽度 = targetPx”
@@ -506,7 +503,8 @@
                 worldBox,
                 camera,
                 overlayCanvas: overlay,
-                targetPx: TARGET_W_PX,
+                targetW: AABBParams.targetW,
+                targetH: AABBParams.targetH,
                 startFactor: 0.5,
                 clamp: [0.1, 5000],
                 zoomBehavior: AABBParams.zoomAnimation,
@@ -598,8 +596,6 @@
 
         function randomAndSolve() {
 
-            
-
             if (info) {
                 info.setText("Ready");
                 info.setType('idle');
@@ -616,32 +612,33 @@
             if (!ok) return;
 
             // === After we have a valid pose+width, continue your pipeline ===
-            rebuildStrips();
+            // rebuildStrips();
 
-            // Update world AABB & helper
-            poseGroup.updateMatrixWorld(true);
-            mesh.updateMatrixWorld(true);
-            worldBox.setFromObject(mesh);
-            boxHelper.box.copy(worldBox);
-            boxHelper.updateMatrixWorld(true);
+            // // Update world AABB & helper
+            // poseGroup.updateMatrixWorld(true);
+            // mesh.updateMatrixWorld(true);
+            // worldBox.setFromObject(mesh);
+            // boxHelper.box.copy(worldBox);
+            // boxHelper.updateMatrixWorld(true);
 
-            // Fit camera so on-screen AABB width is fixed (e.g., 480 px)
-            const measuredAfter = runPoseAndZoomAnimation({
-                worldBox,
-                camera,
-                overlayCanvas: overlay,
-                targetPx: TARGET_W_PX,
-                startFactor: 0.5,
-                clamp: [0.1, 5000],
-                zoomBehavior: AABBParams.zoomAnimation,
-                rotationOpts: {}
-            });
+            // // Fit camera so on-screen AABB width is fixed (e.g., 480 px)
+            // const measuredAfter = runPoseAndZoomAnimation({
+            //     worldBox,
+            //     camera,
+            //     overlayCanvas: overlay,
+            //     targetPx: TARGET_W_PX,
+            //     startFactor: 0.5,
+            //     clamp: [0.1, 5000],
+            //     zoomBehavior: AABBParams.zoomAnimation,
+            //     rotationOpts: {}
+            // });
 
 
-            if (measuredAfter) {
-                wh2Out.textContent = measuredAfter.wh.toFixed(9);
-                err2Out.textContent = (Math.abs(measuredAfter.wh - t) / t * 100).toFixed(6) + '%';
-            }
+            // if (measuredAfter) {
+            //     wh2Out.textContent = measuredAfter.wh.toFixed(9);
+            //     err2Out.textContent = (Math.abs(measuredAfter.wh - t) / t * 100).toFixed(6) + '%';
+            // }
+            applyAndSolve(); 
 
             render();
         }
@@ -754,7 +751,7 @@
             const s2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS);  // ← 跟着 mesh 的 Y 轴走
             const s3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS);
 
-            addOutline(s1); addOutline(s2); addOutline(s3);
+            // addOutline(s1); addOutlilne(s2); addOutline(s3);
 
             s1.material.depthWrite = false;
             s2.material.depthWrite = false;
@@ -847,6 +844,8 @@
         targetCtrl = AABBFolder.add(AABBParams, 'targetRatio').name('Target W/H');
         yawCtrl = AABBFolder.add(AABBParams, 'yaw', -180, 180, 0.01).name('Yaw (°)');
         pitchCtrl = AABBFolder.add(AABBParams, 'pitch', -180, 180, 0.01).name('Pitch (°)');
+        AABBFolder.add(AABBParams, 'targetW', 100, window.innerWidth-100, 1).name('Max Width (Landscape)');
+        AABBFolder.add(AABBParams, 'targetH', 100, window.innerHeight-100, 1).name('Max Height (Portrait / Square)');
         AABBFolder.add(AABBParams, 'rotAnimation').name('Rotation Animation');
         AABBFolder.add(AABBParams, 'zoomAnimation').name('Zoom Animation');
         AABBFolder.add(AABBParams, 'duration', 0.1, 2, 0.1).name('Duration (s)');

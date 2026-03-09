@@ -645,6 +645,30 @@
 
         applyAndSolve();
 
+        // 1. 定义你想要循环的固定比例
+        const ratioSequence = ["1:1", "1:1", "1:1", "1:1"]; 
+        let currentRatioIndex = 0;
+
+        // 2. 创建自动运行的函数
+        function startAutoSolve() {
+            setInterval(() => {
+                // 更新参数为数组中的下一个比例
+                AABBParams.targetRatio = ratioSequence[currentRatioIndex];
+
+                // 调用你的计算函数
+                randomAndSolve();
+
+                // 打印一下当前状态（可选）
+                console.log(`正在切换比例: ${AABBParams.targetRatio}`);
+
+                // 索引递增，如果到末尾了就回到 0
+                currentRatioIndex = (currentRatioIndex + 1) % ratioSequence.length;
+
+            }, 1000); // 1000 毫秒 = 1 秒
+        }
+
+        // 3. 执行自动运行
+        startAutoSolve();
         //====================strip functions start====================
 
         function worldVertex(geometry, i, mesh) {

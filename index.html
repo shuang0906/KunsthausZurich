@@ -29,6 +29,7 @@
 
         const container = document.body;
         let camera, controls, scene, renderer, labelRenderer;
+        let perspCamera, orthoCamera;
         let cube, object, box;
         let strip1, strip2, strip3;
         let kGroup;
@@ -59,7 +60,7 @@
             rebuildStrips();
         }
 
-        const rotParams = { x: 0, y: 0, z: 0, step: 0.001, enabled: false, period: 6 };  
+        const rotParams = { x: 0, y: 0, z: 0, step: 0.001, enabled: false, period: 6 };
 
         function applyRotation() {
             const rx = THREE.MathUtils.degToRad(rotParams.x);
@@ -72,7 +73,7 @@
         }
 
         const colorParams = {
-            bg: '#ffffff', 
+            bg: '#ffffff',
             cStroke: '#000000',
         };
 
@@ -95,7 +96,7 @@
                 }
             });
         }
-        
+
         const matWhiteDS = trackStrokeMaterial(
             new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide })
         );
@@ -165,30 +166,30 @@
             fps: 60,
             filename: 'capture.webm'
         };
-        
+
         init();
 
         //====================strip functions start====================
         function worldToScreen(point, camera, renderer) {
-    const p = point.clone().project(camera);
+            const p = point.clone().project(camera);
 
-    const width = renderer.domElement.clientWidth;
-    const height = renderer.domElement.clientHeight;
+            const width = renderer.domElement.clientWidth;
+            const height = renderer.domElement.clientHeight;
 
-    return {
-        x: (p.x * 0.5 + 0.5) * width,
-        y: (-p.y * 0.5 + 0.5) * height
-    };
-}
-const lineEl = document.createElement('div');
-lineEl.style.position = 'absolute';
-lineEl.style.height = '2px';
-lineEl.style.background = 'red';
-lineEl.style.transformOrigin = '0 50%';
-lineEl.style.pointerEvents = 'none';
+            return {
+                x: (p.x * 0.5 + 0.5) * width,
+                y: (-p.y * 0.5 + 0.5) * height
+            };
+        }
+        const lineEl = document.createElement('div');
+        lineEl.style.position = 'absolute';
+        lineEl.style.height = '2px';
+        lineEl.style.background = 'red';
+        lineEl.style.transformOrigin = '0 50%';
+        lineEl.style.pointerEvents = 'none';
 
-// document.body.appendChild(lineEl);
-labelRenderer.domElement.appendChild(lineEl);
+        // document.body.appendChild(lineEl);
+        labelRenderer.domElement.appendChild(lineEl);
 
         function worldVertex(geometry, i, mesh) {
             return new THREE.Vector3().fromBufferAttribute(geometry.attributes.position, i).applyMatrix4(mesh.matrixWorld);
@@ -324,8 +325,16 @@ labelRenderer.domElement.appendChild(lineEl);
 
         function init() {
 
-            camera = new THREE.PerspectiveCamera(33, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.z = 10;
+            perspCamera = new THREE.PerspectiveCamera(33, window.innerWidth / window.innerHeight, 0.1, 100);
+            perspCamera.position.z = 10;
+
+            // 2. Initialize Ortho Camera immediately
+            orthoCamera = makeMatchingOrtho(perspCamera);
+
+            // 3. Set the ACTIVE camera to ortho
+            camera = orthoCamera;
+            // camera = new THREE.PerspectiveCamera(33, window.innerWidth / window.innerHeight, 0.1, 100);
+            // camera.position.z = 10;
 
             scene = new THREE.Scene();
             scene.background = new THREE.Color(colorParams.bg);
@@ -337,11 +346,11 @@ labelRenderer.domElement.appendChild(lineEl);
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-				labelRenderer = new CSS2DRenderer();
-				labelRenderer.setSize( window.innerWidth, window.innerHeight );
-				labelRenderer.domElement.style.position = 'absolute';
-				labelRenderer.domElement.style.top = '0px';
-				document.body.appendChild( labelRenderer.domElement );
+            labelRenderer = new CSS2DRenderer();
+            labelRenderer.setSize(window.innerWidth, window.innerHeight);
+            labelRenderer.domElement.style.position = 'absolute';
+            labelRenderer.domElement.style.top = '0px';
+            document.body.appendChild(labelRenderer.domElement);
             // controls
 
             controls = new OrbitControls(camera, renderer.domElement);
@@ -370,22 +379,20 @@ labelRenderer.domElement.appendChild(lineEl);
 
         //====================camera functions start====================
         // keep your existing perspective camera as the "master"
-        const perspCamera = camera;
+        // const perspCamera = camera;
 
         // make an ortho camera that matches what the perspective camera sees at the controls target
         function makeMatchingOrtho(pcam) {
-            const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
-            const d = pcam.position.distanceTo(controls.target);
+            const aspect = window.innerWidth / window.innerHeight;
+            const d = 10; // Default distance if controls aren't ready yet
             const halfH = Math.tan(THREE.MathUtils.degToRad(pcam.fov * 0.5)) * d;
             const halfW = halfH * aspect;
+
             const ocam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, pcam.near, pcam.far);
             ocam.position.copy(pcam.position);
-            ocam.quaternion.copy(pcam.quaternion);
             ocam.updateProjectionMatrix();
             return ocam;
         }
-
-        const orthoCamera = makeMatchingOrtho(perspCamera);
 
         // keep the ortho frustum in sync with current perspective settings/pose
         function syncOrthoFrustum() {

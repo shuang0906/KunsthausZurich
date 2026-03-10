@@ -103,9 +103,9 @@ export function addStaticUI({
 
     [xCtrl, yCtrl, zCtrl].forEach(c => c.step(rotParams.step));
 
-    staticRotation.add(rotParams, 'step', 0.01, 45, 0.01).name('Step').onChange((s) => {
-        [xCtrl, yCtrl, zCtrl].forEach(c => c.step(s));
-    });
+    // staticRotation.add(rotParams, 'step', 0.01, 45, 0.01).name('Step').onChange((s) => {
+    //     [xCtrl, yCtrl, zCtrl].forEach(c => c.step(s));
+    // });
 
     staticFolder.add({
         reset: () => {

@@ -5,9 +5,16 @@ function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
+// function easeOutCubic(t) {
+//   const c1 = 1.70158;
+//   const c3 = c1 + 1;
+//   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+// }
+
 function easeOutCubic(t) {
-  t = Math.max(0, Math.min(1, t));
-  return 1 - Math.pow(1 - t, 3);
+  const c1 = 0.3; // 极小的回弹系数
+  // 将原先的 Power 3 提升到 4，增加刹车瞬间的加速度
+  return 1 + (c1 + 1) * Math.pow(t - 1, 4) + c1 * Math.pow(t - 1, 3);
 }
 
 export function makeAnimator(ctx) {

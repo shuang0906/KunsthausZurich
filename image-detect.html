@@ -63,6 +63,7 @@
         let strip1, strip2, strip3;
         let targetCtrl, yawCtrl, pitchCtrl;
         let info;
+        let TARGET_W_PX;
 
         const el = id => document.getElementById(id);
         function parseRatio(str) {
@@ -138,7 +139,7 @@
             targetH: 400,
             rotAnimation: true,
             zoomAnimation: true,
-            duration: 1,
+            duration: 0.5,
             applyAndSolve: applyAndSolve,
             randomAndSolve: randomAndSolve
         }
@@ -265,8 +266,10 @@
         poseGroup.add(mesh);
 
         const worldBox = new THREE.Box3().setFromObject(mesh);
-        const boxHelper = new THREE.Box3Helper(worldBox, 0x00ff00); // 橙色
+        const boxHelper = new THREE.Box3Helper(worldBox, 0xc9c9c9); // 橙色
         scene.add(boxHelper);
+        boxHelper.renderOrder = -1;
+        boxHelper.material.depthTest = false;
 
         function render() {
             renderer.render(scene, camera);
@@ -505,7 +508,7 @@
                 overlayCanvas: overlay,
                 targetW: AABBParams.targetW,
                 targetH: AABBParams.targetH,
-                startFactor: 0.5,
+                startFactor: 0.75,
                 clamp: [0.1, 5000],
                 zoomBehavior: AABBParams.zoomAnimation,
                 rotationOpts: {}
@@ -638,7 +641,7 @@
             //     wh2Out.textContent = measuredAfter.wh.toFixed(9);
             //     err2Out.textContent = (Math.abs(measuredAfter.wh - t) / t * 100).toFixed(6) + '%';
             // }
-            applyAndSolve(); 
+            applyAndSolve();
 
             render();
         }
@@ -775,7 +778,7 @@
             const s2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS);  // ← 跟着 mesh 的 Y 轴走
             const s3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS);
 
-            // addOutline(s1); addOutlilne(s2); addOutline(s3);
+            addOutline(s1); addOutline(s2); addOutline(s3);
 
             s1.material.depthWrite = false;
             s2.material.depthWrite = false;
@@ -868,8 +871,8 @@
         targetCtrl = AABBFolder.add(AABBParams, 'targetRatio').name('Target W/H');
         yawCtrl = AABBFolder.add(AABBParams, 'yaw', -180, 180, 0.01).name('Yaw (°)');
         pitchCtrl = AABBFolder.add(AABBParams, 'pitch', -180, 180, 0.01).name('Pitch (°)');
-        AABBFolder.add(AABBParams, 'targetW', 100, window.innerWidth-100, 1).name('Max Width (Landscape)');
-        AABBFolder.add(AABBParams, 'targetH', 100, window.innerHeight-100, 1).name('Max Height (Portrait / Square)');
+        AABBFolder.add(AABBParams, 'targetW', 100, window.innerWidth - 100, 1).name('Max Width (Landscape)');
+        AABBFolder.add(AABBParams, 'targetH', 100, window.innerHeight - 100, 1).name('Max Height (Portrait / Square)');
         AABBFolder.add(AABBParams, 'rotAnimation').name('Rotation Animation');
         AABBFolder.add(AABBParams, 'zoomAnimation').name('Zoom Animation');
         AABBFolder.add(AABBParams, 'duration', 0.1, 2, 0.1).name('Duration (s)');
@@ -936,9 +939,15 @@
         });
 
         function reduceRatio(w, h) {
-            const gcd = (a, b) => (b ? gcd(b, a % b) : a);
-            const g = gcd(w, h);
-            return [Math.round(w / g), Math.round(h / g)];
+            // 处理浮点数，因为计算出的宽高可能是小数
+            const width = Math.round(w);
+            const height = Math.round(h);
+
+            // 辗转相除法求最大公约数
+            const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
+            const divisor = gcd(width, height);
+
+            return [width / divisor, height / divisor];
         }
 
         fileInput.addEventListener('change', () => {
@@ -949,16 +958,13 @@
             objectUrl = URL.createObjectURL(file);
 
             img.onload = () => {
-                const w = img.naturalWidth;
-                const h = img.naturalHeight;
-                const ratio = w / h;
+                const PADDING = 20; // 设置你想要的固定边距 (px)
+                const naturalW = img.naturalWidth;
+                const naturalH = img.naturalHeight;
+                const aspectRatio = naturalW / naturalH;
 
-                const [rw, rh] = reduceRatio(w, h);
-                AABBParams.targetRatio = `${rw}:${rh}`;
-                targetCtrl.updateDisplay();
-
-                // Landscape or square → width = 80vw; Portrait → height = 80vh
-                if (ratio >= 1) {
+                // 1. 设置图片的显示样式 (保持比例缩放)
+                if (aspectRatio >= 1) {
                     img.style.width = '50vw';
                     img.style.height = 'auto';
                 } else {
@@ -966,8 +972,29 @@
                     img.style.height = '80vh';
                 }
 
-                TARGET_W_PX = Math.round(img.getBoundingClientRect().width);
-                console.log("TARGET_W_PX", TARGET_W_PX);
+                // 2. 获取包含 Padding 的显示尺寸
+                const rect = img.getBoundingClientRect();
+
+                // 3. 计算扣除 Padding 后的有效渲染区域
+                let availableW = rect.width - (PADDING * 2);
+                let availableH = rect.height - (PADDING * 2);
+                console.log("Rect size:", rect.width, rect.height);
+                console.log('Available area for 3D:', { availableW, availableH });
+
+                // 5. 更新 AABBParams
+                AABBParams.targetW = Math.round(availableW);
+                AABBParams.targetH = Math.round(availableH);
+
+                // 6. 更新比例显示 (将比例精简为最简分数，如 16:9)
+                const [rw, rh] = reduceRatio(availableW, availableH);
+                AABBParams.targetRatio = `${rw}:${rh}`;
+
+                if (targetCtrl) {
+                    targetCtrl.updateDisplay();
+                }
+
+                // 7. 执行求解逻辑
+                randomAndSolve();
             };
 
             img.src = objectUrl;

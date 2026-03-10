@@ -60,6 +60,7 @@
         // ==========================================
         let renderer, scene, camera, mesh, boxHelper, kGroup;
         let geo;
+        let currentAnimId = null;
         const frustumHeight = 8;
         const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
 
@@ -105,40 +106,90 @@
         // ==========================================
         // 核心逻辑 (直接处理求解与渲染)
         // ==========================================
+        // 存储当前动画 ID 以便随时打断
+
+
         function applyAndSolve() {
             const t = parseRatio(AABBParams.targetRatio);
             if (!isFinite(t) || t <= 0) return;
 
-            // 1. 应用变换
-            mesh.rotation.set(deg2rad(AABBParams.pitch), deg2rad(AABBParams.yaw), 0, 'XYZ');
-            mesh.updateMatrixWorld(true);
+            // 1. 设置目标旋转并计算目标 Scale
+            const targetRot = new THREE.Euler(deg2rad(AABBParams.pitch), deg2rad(AABBParams.yaw), 0, 'XYZ');
+            const tempMesh = new THREE.Mesh(geo, new THREE.MeshNormalMaterial());
+            tempMesh.rotation.copy(targetRot);
+            tempMesh.updateMatrixWorld(true);
 
-            // 2. 求解并应用 scale
-            const R = getAbsR01(mesh);
+            const R = getAbsR01(tempMesh);
             const { hx, denom } = solveHxForWH(t, R);
-            if (Math.abs(denom) > 1e-10 && hx > 0) {
-                mesh.scale.set(hx / 2, 1, 1);
-            }
+            const targetScale = (Math.abs(denom) > 1e-10 && hx > 0) ? hx / 2 : 0.5;
 
-            // 3. 关键：更新世界包围盒并适配相机
+            // 2. 准备动画参数
+            const startQuaternion = mesh.quaternion.clone();
+            const targetQuaternion = new THREE.Quaternion().setFromEuler(targetRot);
+            const startScale = mesh.scale.x;
+            const startZoom = camera.zoom;
+
+            // 计算目标缩放以适配画面
+            mesh.scale.set(targetScale, 1, 1);
             mesh.updateMatrixWorld(true);
-            const worldBox = new THREE.Box3().setFromObject(mesh);
+            const targetZoom = calculateTargetZoom(new THREE.Box3().setFromObject(mesh));
 
-            // 调用刚才定义的适配函数
-            updateCameraZoom(worldBox);
+            // 3. 开始平滑动画
+            if (currentAnimId) cancelAnimationFrame(currentAnimId);
+            const startTime = performance.now();
+            const duration = 1000; // 动画时长 1 秒
 
-            // 4. 更新辅助线与重绘
-            boxHelper.box.setFromObject(mesh);
-            rebuildStrips();
-            renderer.render(scene, camera);
+            function animate(now) {
+                const progress = Math.min((now - startTime) / duration, 1);
+                const ease = 1 - Math.pow(1 - progress, 3);
+
+                // 1. 旋转与缩放插值
+                mesh.quaternion.copy(startQuaternion).slerp(targetQuaternion, ease);
+                mesh.scale.set(startScale + (targetScale - startScale) * ease, 1, 1);
+
+                // 2. 【关键修正】：每一帧更新世界矩阵后，重新计算适配该姿态的 Zoom
+                mesh.updateMatrixWorld(true);
+                const currentWorldBox = new THREE.Box3().setFromObject(mesh);
+
+                // 使用之前的逻辑计算当前姿态下的最优 Zoom
+                const currentTargetZoom = calculateTargetZoom(currentWorldBox);
+
+                // 3. 应用 Zoom (这里可以对 Zoom 也做线性插值，或者直接应用计算出的值)
+                camera.zoom = currentTargetZoom;
+                camera.updateProjectionMatrix();
+
+                // 4. 更新辅助线
+                boxHelper.box.setFromObject(mesh);
+
+                // 5. 重建笔触并渲染
+                rebuildStrips();
+                renderer.render(scene, camera);
+
+                if (progress < 1) currentAnimId = requestAnimationFrame(animate);
+            }
+            currentAnimId = requestAnimationFrame(animate);
         }
 
+        // 自动循环：改为随机生成参数并触发
         function startAutoLoop() {
             setInterval(() => {
                 AABBParams.yaw = (Math.random() * 60) - 30;
                 AABBParams.pitch = (Math.random() * 60) - 30;
                 applyAndSolve();
-            }, 1500);
+            }, 2500); // 间隔时间需大于动画时间
+        }
+
+        function calculateTargetZoom(worldBox) {
+            const size = new THREE.Vector3();
+            worldBox.getSize(size);
+            const aspect = window.innerWidth / window.innerHeight;
+            const frustumH = frustumHeight;
+            const frustumW = frustumH * aspect;
+
+            // 计算满足目标尺寸的最小缩放倍率
+            const zoomW = (AABBParams.targetW / window.innerWidth) * frustumW / size.x;
+            const zoomH = (AABBParams.targetH / window.innerHeight) * frustumH / size.y;
+            return Math.min(zoomW, zoomH) * 0.9; // 乘以0.9留一点边距
         }
 
         // ==========================================

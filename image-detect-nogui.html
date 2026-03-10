@@ -14,13 +14,43 @@
         .ui-hidden {
             display: none;
         }
+
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            /* 防止出现滚动条导致计算偏移 */
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            /* 水平居中 */
+            align-items: center;
+            /* 垂直居中 */
+        }
+
+        #bgCanvas,
+        #rendererCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            /* CSS 宽度 */
+            height: 100%;
+            /* CSS 高度 */
+        }
     </style>
 </head>
 
 <body>
-    <div class="stage">
-        <canvas id="overlay"
-            style="position:absolute;left:0;top:0;pointer-events:none; background: transparent;"></canvas>
+    <div id="container" style="position: relative; width: 100vw; height: 100vh;">
+        <canvas id="bgCanvas" style="position: absolute; top: 0; left: 0; z-index: 1;"></canvas>
+        <canvas id="rendererCanvas" style="position: absolute; top: 0; left: 0; z-index: 2;"></canvas>
     </div>
 
     <script type="importmap">
@@ -33,6 +63,7 @@
     </script>
 
     <script type="module">
+
         import * as THREE from 'three';
 
         // ==========================================
@@ -48,10 +79,10 @@
 
         const sequence = [
             { ratio: "1:1", w: 400, h: 400 },
-            { ratio: "3:4", w: 400, h: 400 },
-            { ratio: "3:2", w: 600, h: 600 },
             { ratio: "1:1", w: 400, h: 400 },
-            { ratio: "16:9", w: 600, h: 600 },
+            { ratio: "3:4", w: 400, h: 533.33 },
+            { ratio: "3:2", w: 600, h: 400 },
+            { ratio: "16:9", w: 600, h: 337.5 },
         ];
         let currentIdx = 0;
 
@@ -75,14 +106,33 @@
         const frustumHeight = 8;
         const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
 
-        const duration = 1000; // 动画时长 1 秒
-        const interval = 2000; // 每隔 3 秒切换一次
-        
+        const animationModes = {
+            smooth: { duration: 1000, interval: "2000" },
+            snappy: { duration: 800, interval: "1000" }
+        }; 0
+
+        let currentMode = 'smooth'; // 默认模式
+        const mode = animationModes[currentMode];
+        let yaw, pitch;
+
+        const duration = mode.duration;
+        const interval = mode.interval;
+
         init();
 
         function init() {
             // Renderer
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+
+            const canvasElement = document.getElementById('rendererCanvas');
+
+            // 在创建渲染器时传入
+            renderer = new THREE.WebGLRenderer({
+                canvas: canvasElement, // 关键：指定画布
+                antialias: true,       // 抗锯齿
+                alpha: true            // 如果你需要背景 Canvas 透出来，这个一定要设为 true
+            });
+
+            // renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
@@ -110,7 +160,7 @@
             const worldBox = new THREE.Box3().setFromObject(mesh);
             boxHelper = new THREE.Box3Helper(worldBox, 0x00ff00);
             boxHelper.visible = boxParams.showBoxHelper;
-            scene.add(boxHelper);
+            // scene.add(boxHelper);
 
             window.addEventListener('resize', onWindowResize);
             applyAndSolve();
@@ -172,7 +222,7 @@
 
             function animate(now) {
                 const progress = Math.min((now - startTime) / duration, 1);
-                const ease = 1 - Math.pow(1 - progress, 3);
+                const ease = 1 - Math.pow(1 - progress, 4);
 
                 // 1. 旋转与缩放插值
                 mesh.quaternion.copy(startQuaternion).slerp(targetQuaternion, ease);
@@ -186,6 +236,7 @@
 
                 const currentW = startW + (targetW - startW) * ease;
                 const currentH = startH + (targetH - startH) * ease;
+                updateBackgroundCanvas(currentW, currentH);
 
                 // 2. 传入插值后的尺寸到 Zoom 计算函数
                 // 注意：需要修改 calculateTargetZoom 让其接收 w 和 h 作为参数
@@ -217,33 +268,49 @@
         function startAutoLoop() {
             setInterval(() => {
                 // 切换索引
-                const config = sequence[currentIdx];
-                currentIdx = (currentIdx + 1) % sequence.length;
-
-                // 1. 生成初始随机角度
-                let yaw = randomExclude(10, 30, 10, 30);
-                let pitch = randomExclude(10, 30, 10, 30);
+                currentIdx = (currentIdx + 1) % sequence.length; // 1. 先更新索引
+                const config = sequence[currentIdx];             // 2. 再获取这个新索引下的配置
 
                 // 2. 加入业务逻辑 Filter
-                // 判断是否为 portrait (宽 < 高)
-                const isPortraitOrSquare = (config.w < config.h) || (config.w === config.h);
+                // 获取比例字符串，例如 "9:16"
+                const [w, h] = config.ratio.split(':').map(Number);
+                const isPortraitOrSquare = (w <= h);
+                console.log(`解析比例: ${w}:${h}, 判定结果: ${w <= h ? '竖屏/方屏' : '横屏'}`);
 
-                if (isPortraitOrSquare && yaw > 0) {
-                    // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
-                    pitch = -Math.abs(pitch);
-                } else if (!isPortraitOrSquare && yaw > 0) {
-                    // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
-                    pitch = Math.abs(pitch);
+                if (currentMode === 'smooth') {
+
+                    yaw = randomExclude(10, 30, 10, 30);
+                    pitch = randomExclude(10, 30, 10, 30);
+                    if (isPortraitOrSquare && yaw > 0) {
+                        // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
+                        pitch = -Math.abs(pitch);
+                    } else if (!isPortraitOrSquare && yaw > 0) {
+                        // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
+                        pitch = Math.abs(pitch);
+                    }
+                    // 3. 赋值给参数
+                    AABBParams.yaw = yaw;
+                    AABBParams.pitch = pitch;
+                } else {
+
+                    yaw = randomExclude(10, 20, 10, 20);
+                    if (isPortraitOrSquare && yaw > 0) {
+                        // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
+                        pitch = -15;
+                    } else if (!isPortraitOrSquare && yaw > 0) {
+                        // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
+                        pitch = 15;
+
+                    }
+                    // 非平滑模式直接使用预设的角度
+                    AABBParams.yaw = yaw;
+                    AABBParams.pitch = pitch;
                 }
-
-                // 3. 赋值给参数
-                AABBParams.yaw = yaw;
-                AABBParams.pitch = pitch;
-                console.log(`随机生成的角度 - Yaw: ${yaw.toFixed(2)}, Pitch: ${pitch.toFixed(2)}`);
+                // console.log(`--- 切换参数 ---`);
+                // console.log(`切换到: ${sequence[currentIdx].ratio}, 尺寸: ${sequence[currentIdx].w}x${sequence[currentIdx].h}`);
+                // console.log(`随机生成的角度 - Yaw: ${yaw.toFixed(2)}, Pitch: ${pitch.toFixed(2)}`);
                 // 执行更新
                 applyAndSolve();
-
-                console.log(`切换到: ${sequence[currentIdx].ratio}, 尺寸: ${sequence[currentIdx].w}x${sequence[currentIdx].h}`);
             }, interval);
         }
 
@@ -251,6 +318,7 @@
         function calculateTargetZoom(worldBox, w, h) {
             const size = new THREE.Vector3();
             worldBox.getSize(size);
+            console.log(`当前物体世界尺寸: ${size.x.toFixed(2)} x ${size.y.toFixed(2)}`);
 
             const aspect = window.innerWidth / window.innerHeight;
             const frustumW = frustumHeight * aspect;
@@ -339,6 +407,155 @@
             camera.zoom = Math.min(zoomW, zoomH);
             camera.updateProjectionMatrix();
         }
+
+        const bgCanvas = document.getElementById('bgCanvas');
+        const ctx = bgCanvas.getContext('2d');
+
+        // 绘制带有箭头和数值的虚线标注
+        function drawDimensionLine(start, end, text, isVertical = false) {
+            ctx.save();
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 1.5;
+
+            // 1. 绘制虚线主体
+            ctx.setLineDash([1.5, 5]);
+            ctx.beginPath();
+            
+            if (isVertical) {
+            ctx.moveTo(start.x, start.y+4);
+            ctx.lineTo(end.x, end.y-4);
+            ctx.stroke();
+            ctx.setLineDash([]); // 重置为实线
+            } else {
+            ctx.moveTo(start.x+4, start.y);
+            ctx.lineTo(end.x-4, end.y);
+            ctx.stroke();
+            ctx.setLineDash([]); // 重置为实线
+            }
+
+            ctx.lineWidth = 1;
+            // 2. 绘制两端短竖线 (界线)
+            const tickSize = 5; // 短竖线长度
+            ctx.beginPath();
+            if (isVertical) {
+                // 横向的短线 (垂直标注时)
+                ctx.moveTo(start.x - tickSize, start.y);
+                ctx.lineTo(start.x + tickSize, start.y);
+                ctx.moveTo(end.x - tickSize, end.y);
+                ctx.lineTo(end.x + tickSize, end.y);
+            } else {
+                // 纵向的短线 (水平标注时)
+                ctx.moveTo(start.x, start.y - tickSize);
+                ctx.lineTo(start.x, start.y + tickSize);
+                ctx.moveTo(end.x, end.y - tickSize);
+                ctx.lineTo(end.x, end.y + tickSize);
+            }
+            ctx.stroke();
+
+            // 3. 绘制实心箭头
+            const arrowSize = 0;
+            ctx.fillStyle = '#000';
+            [start, end].forEach(point => {
+                ctx.beginPath();
+                if (isVertical) {
+                    ctx.moveTo(point.x, point.y);
+                    ctx.lineTo(point.x - arrowSize, point.y + (point === start ? arrowSize : -arrowSize));
+                    ctx.lineTo(point.x + arrowSize, point.y + (point === start ? arrowSize : -arrowSize));
+                } else {
+                    ctx.moveTo(point.x, point.y);
+                    ctx.lineTo(point.x + (point === start ? arrowSize : -arrowSize), point.y - arrowSize);
+                    ctx.lineTo(point.x + (point === start ? arrowSize : -arrowSize), point.y + arrowSize);
+                }
+                ctx.fill();
+            });
+
+            // 4. 绘制数值文字
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            const midX = (start.x + end.x) / 2;
+            const midY = (start.y + end.y) / 2;
+            if (isVertical) {
+                // 让文字绕着 midX, midY 旋转 90 度
+                ctx.save();
+                ctx.translate(midX - 10, midY); // 稍微向左偏移，避免压线
+                ctx.rotate(-Math.PI / 2);      // 旋转 90 度
+                ctx.fillText(text, 0, 0);
+                ctx.restore();
+            } else {
+                ctx.fillText(text, midX, midY - 10);
+            }
+            ctx.restore();
+        }
+
+        function updateBackgroundCanvas(w, h) {
+            // 这里清空画布的尺寸必须是实际的像素尺寸 (width * dpr)
+            ctx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+
+            // 关键：这里的中心点是 CSS 逻辑像素的中心 (window.innerWidth / 2)
+            // 即使 bgCanvas.width 是 2000，这里的 centerX 依然应该是 1000
+            const centerX = window.innerWidth / 2;
+            const centerY = window.innerHeight / 2;
+
+            ctx.save();
+
+            const padding = 30;
+            const rectW = w + padding * 2;
+            const rectH = h + padding * 2;
+
+            ctx.save();
+            ctx.translate(centerX, centerY);
+
+            // 1. 绘制主体矩形 (带旋转)
+            ctx.save();
+            ctx.fillStyle = '#ebebeb';
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)'; // 阴影颜色（半透明黑）
+            ctx.shadowBlur = 3;                    // 阴影模糊程度
+            ctx.shadowOffsetX = ctx.shadowOffsetY = 2;
+            ctx.fillRect(-rectW / 2, -rectH / 2, rectW, rectH);
+            ctx.fill();
+            ctx.restore();
+
+            // 1. Width 标注 (上方)
+            const linepadding = 20;
+            drawDimensionLine(
+                { x: -rectW / 2, y: -rectH / 2 - linepadding },
+                { x: rectW / 2, y: -rectH / 2 - linepadding },
+                `${Math.round(w)} px`, false
+            );
+
+            // 2. Height 标注 (左侧)
+            drawDimensionLine(
+                { x: -rectW / 2 - linepadding, y: -rectH / 2 },
+                { x: -rectW / 2 - linepadding, y: rectH / 2 },
+                `${Math.round(h)} px`, true
+            );
+
+            ctx.restore();
+        }
+        function resizeCanvases() {
+            const dpr = window.devicePixelRatio || 1; // 获取缩放比，通常是 2 或 3
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+
+            // 1. 同步 bgCanvas (2D 背景层)
+            // 放大内部缓冲区
+            bgCanvas.width = width * dpr;
+            bgCanvas.height = height * dpr;
+
+            // 强制 CSS 大小为屏幕物理尺寸
+            bgCanvas.style.width = width + 'px';
+            bgCanvas.style.height = height + 'px';
+
+            // 2. 缩放绘图上下文，确保后续绘制坐标比例正确
+            ctx.scale(dpr, dpr);
+
+            // 3. 同步 Three.js Renderer
+            renderer.setPixelRatio(dpr);
+            renderer.setSize(width, height);
+        }
+        resizeCanvases();
+        window.addEventListener('resize', resizeCanvases);
+
     </script>
 </body>
 

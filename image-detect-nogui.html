@@ -41,13 +41,22 @@
         const AABBParams = {
             targetRatio: "1:1",
             pitch: 15,
-            yaw: 30,
-            targetW: 400,
-            targetH: 400
+            yaw: -15,
+            targetW: 600,
+            targetH: 600
         };
 
+        const sequence = [
+            { ratio: "1:1", w: 400, h: 400 },
+            { ratio: "3:4", w: 400, h: 400 },
+            { ratio: "3:2", w: 600, h: 600 },
+            { ratio: "1:1", w: 400, h: 400 },
+            { ratio: "16:9", w: 600, h: 600 },
+        ];
+        let currentIdx = 0;
+
         const boxParams = {
-            kStroke: 0.3,
+            kStroke: 0.15,
             showBoxHelper: true
         };
 
@@ -60,10 +69,15 @@
         // ==========================================
         let renderer, scene, camera, mesh, boxHelper, kGroup;
         let geo;
+        let prevW = 400; // 初始化为你的默认宽度
+        let prevH = 400; // 初始化为你的默认高度
         let currentAnimId = null;
         const frustumHeight = 8;
         const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
 
+        const duration = 1000; // 动画时长 1 秒
+        const interval = 2000; // 每隔 3 秒切换一次
+        
         init();
 
         function init() {
@@ -110,6 +124,24 @@
 
 
         function applyAndSolve() {
+            const config = sequence[currentIdx];
+
+            // 【关键】：把上一次的目标作为本次的起点
+            const startW = prevW;
+            const startH = prevH;
+
+            // 现在更新全局变量，供下一轮使用
+            AABBParams.targetRatio = config.ratio;
+            AABBParams.targetW = config.w;
+            AABBParams.targetH = config.h;
+
+            // 更新 prev 供下一次 applyAndSolve 使用
+            prevW = config.w;
+            prevH = config.h;
+
+            const targetW = config.w;
+            const targetH = config.h;
+
             const t = parseRatio(AABBParams.targetRatio);
             if (!isFinite(t) || t <= 0) return;
 
@@ -132,12 +164,11 @@
             // 计算目标缩放以适配画面
             mesh.scale.set(targetScale, 1, 1);
             mesh.updateMatrixWorld(true);
-            const targetZoom = calculateTargetZoom(new THREE.Box3().setFromObject(mesh));
+            const targetZoom = calculateTargetZoom(new THREE.Box3().setFromObject(mesh), config.w, config.h);
 
             // 3. 开始平滑动画
             if (currentAnimId) cancelAnimationFrame(currentAnimId);
             const startTime = performance.now();
-            const duration = 1000; // 动画时长 1 秒
 
             function animate(now) {
                 const progress = Math.min((now - startTime) / duration, 1);
@@ -152,8 +183,13 @@
                 const currentWorldBox = new THREE.Box3().setFromObject(mesh);
 
                 // 使用之前的逻辑计算当前姿态下的最优 Zoom
-                const currentTargetZoom = calculateTargetZoom(currentWorldBox);
 
+                const currentW = startW + (targetW - startW) * ease;
+                const currentH = startH + (targetH - startH) * ease;
+
+                // 2. 传入插值后的尺寸到 Zoom 计算函数
+                // 注意：需要修改 calculateTargetZoom 让其接收 w 和 h 作为参数
+                const currentTargetZoom = calculateTargetZoom(currentWorldBox, currentW, currentH);
                 // 3. 应用 Zoom (这里可以对 Zoom 也做线性插值，或者直接应用计算出的值)
                 camera.zoom = currentTargetZoom;
                 camera.updateProjectionMatrix();
@@ -170,26 +206,60 @@
             currentAnimId = requestAnimationFrame(animate);
         }
 
+        function randomExclude(min, max, absMin, absMax) {
+            // 随机决定是正区间还是负区间
+            const sign = Math.random() > 0.3 ? 1 : -1;
+            // 在 [absMin, absMax] 范围内取值
+            const val = (Math.random() * (absMax - absMin)) + absMin;
+            return val * sign;
+        }
         // 自动循环：改为随机生成参数并触发
         function startAutoLoop() {
             setInterval(() => {
-                AABBParams.yaw = (Math.random() * 60) - 30;
-                AABBParams.pitch = (Math.random() * 60) - 30;
+                // 切换索引
+                const config = sequence[currentIdx];
+                currentIdx = (currentIdx + 1) % sequence.length;
+
+                // 1. 生成初始随机角度
+                let yaw = randomExclude(10, 30, 10, 30);
+                let pitch = randomExclude(10, 30, 10, 30);
+
+                // 2. 加入业务逻辑 Filter
+                // 判断是否为 portrait (宽 < 高)
+                const isPortraitOrSquare = (config.w < config.h) || (config.w === config.h);
+
+                if (isPortraitOrSquare && yaw > 0) {
+                    // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
+                    pitch = -Math.abs(pitch);
+                } else if (!isPortraitOrSquare && yaw > 0) {
+                    // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
+                    pitch = Math.abs(pitch);
+                }
+
+                // 3. 赋值给参数
+                AABBParams.yaw = yaw;
+                AABBParams.pitch = pitch;
+                console.log(`随机生成的角度 - Yaw: ${yaw.toFixed(2)}, Pitch: ${pitch.toFixed(2)}`);
+                // 执行更新
                 applyAndSolve();
-            }, 2500); // 间隔时间需大于动画时间
+
+                console.log(`切换到: ${sequence[currentIdx].ratio}, 尺寸: ${sequence[currentIdx].w}x${sequence[currentIdx].h}`);
+            }, interval);
         }
 
-        function calculateTargetZoom(worldBox) {
+        // 改为接收动态尺寸参数
+        function calculateTargetZoom(worldBox, w, h) {
             const size = new THREE.Vector3();
             worldBox.getSize(size);
-            const aspect = window.innerWidth / window.innerHeight;
-            const frustumH = frustumHeight;
-            const frustumW = frustumH * aspect;
 
-            // 计算满足目标尺寸的最小缩放倍率
-            const zoomW = (AABBParams.targetW / window.innerWidth) * frustumW / size.x;
-            const zoomH = (AABBParams.targetH / window.innerHeight) * frustumH / size.y;
-            return Math.min(zoomW, zoomH) * 0.9; // 乘以0.9留一点边距
+            const aspect = window.innerWidth / window.innerHeight;
+            const frustumW = frustumHeight * aspect;
+
+            // 使用传入的 w 和 h 而不是 AABBParams 中的全局变量
+            const zoomW = (w / window.innerWidth) * frustumW / size.x;
+            const zoomH = (h / window.innerHeight) * frustumHeight / size.y;
+
+            return Math.min(zoomW, zoomH) * 0.9;
         }
 
         // ==========================================

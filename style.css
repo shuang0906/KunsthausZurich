@@ -1,3 +1,11 @@
+        
+        .fragment-mono-regular {
+  font-family: "Fragment Mono", monospace;
+  font-weight: 400;
+  font-style: normal;
+}
+
+
         body {
             margin: 0;
         }
@@ -19,7 +27,7 @@
             --padding: 2px;
             --widget-border-radius: 0;
             --folder-indent: 4px;
-
+            --font-family: "Fragment Mono", monospace;
 
             .slider {
                 border-right: 2px solid var(--widget-color);
@@ -30,6 +38,9 @@
                 border-right: 2px solid var(--hover-color);
             }
 
+            .title{
+                font-weight: 400;
+            }
             .children .title:hover {
                 --title-background-color: #ebebeb;
             }
@@ -47,6 +58,17 @@
                 padding: 1px 2px 6px 2px;
                 white-space: pre-wrap;
             }
+
+                .disabled{
+                    opacity: 1 !important;
+                }
+
+                button:disabled {
+                    background-color: #ffffff !important;
+                    color: black !important;
+                    cursor: not-allowed;
+                }
+
         }
 
         .lil-gui.root {
@@ -100,7 +122,7 @@
 
         button {
             padding: 8px 12px;
-            border: 1px solid var(--border);
+            border: 1px solid black !important;
             border-radius: 8px;
             background: #111;
             color: #fff;

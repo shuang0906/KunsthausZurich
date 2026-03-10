@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Logo Composer — 静态笔触版</title>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; }
+        #container { position: relative; width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; }
+        #bgCanvas, #rendererCanvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <canvas id="bgCanvas" style="z-index: 1;"></canvas>
+        <canvas id="rendererCanvas" style="z-index: 2;"></canvas>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        let renderer, scene, camera, mesh, kGroup;
+        const geo = new THREE.BoxGeometry(4, 2, 2);
+        const matWhiteDS = new THREE.MeshBasicMaterial({ color: '#000000', side: THREE.DoubleSide });
+
+        init();
+
+        function init() {
+            const canvasElement = document.getElementById('rendererCanvas');
+            renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            scene = new THREE.Scene();
+            const aspect = window.innerWidth / window.innerHeight;
+            camera = new THREE.OrthographicCamera(-4 * aspect, 4 * aspect, 4, -4, -100, 100);
+            camera.position.set(5, 5, 5);
+            camera.lookAt(0, 0, 0);
+
+            // 核心物体
+            const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+            mesh = new THREE.Mesh(geo, mat);
+            scene.add(mesh);
+
+            // 初始化笔触容器
+            kGroup = new THREE.Group();
+            scene.add(kGroup);
+
+            window.addEventListener('resize', onWindowResize);
+            
+            rebuildStrips();
+            renderer.render(scene, camera);
+        }
+
+        // ==========================================
+        // 笔触与辅助函数
+        // ==========================================
+        function rebuildStrips() {
+            if (!kGroup) return;
+            while (kGroup.children.length > 0) {
+                const m = kGroup.children[0];
+                if (m.geometry) m.geometry.dispose();
+                kGroup.remove(m);
+            }
+
+            mesh.updateMatrixWorld(true);
+            const absoluteStroke = 0.15 / 1.0; // 基于基准 zoom 计算
+            const qWorld = new THREE.Quaternion();
+            mesh.getWorldQuaternion(qWorld);
+
+            const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+
+            const s1 = makeStrip(worldVertex(geo, 5, mesh), worldVertex(geo, 7, mesh), axisX, matWhiteDS);
+            const s2 = makeStrip(worldVertex(geo, 1, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
+            const s3 = makeCenteredStrip(worldVertex(geo, 2, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5).lerp(worldVertex(geo, 1, mesh), 0.2), axisY, matWhiteDS);
+
+            kGroup.add(s1, s2, s3);
+        }
+
+        function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
+        function makeQuad(p0, p1, p2, p3, mat) {
+            const g = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]);
+            g.setIndex([0, 1, 2, 0, 2, 3]);
+            return new THREE.Mesh(g, mat);
+        }
+        function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
+        function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
+
+        function onWindowResize() {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -4 * aspect;
+            camera.right = 4 * aspect;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>

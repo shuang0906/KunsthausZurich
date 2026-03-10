@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Logo Composer — 精简版</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        svg {
+            background-color: transparent !important;
+        }
+
+        .ui-hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="stage">
+        <canvas id="overlay"
+            style="position:absolute;left:0;top:0;pointer-events:none; background: transparent;"></canvas>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.125.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // ==========================================
+        // 核心控制参数
+        // ==========================================
+        const AABBParams = {
+            targetRatio: "1:1",
+            pitch: 15,
+            yaw: 30,
+            targetW: 400,
+            targetH: 400
+        };
+
+        const boxParams = {
+            kStroke: 0.3,
+            showBoxHelper: true
+        };
+
+        const colorParams = {
+            cStroke: '#000000',
+        };
+
+        // ==========================================
+        // 全局变量
+        // ==========================================
+        let renderer, scene, camera, mesh, boxHelper, kGroup;
+        let geo;
+        const frustumHeight = 8;
+        const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
+
+        init();
+
+        function init() {
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Scene & Camera
+            scene = new THREE.Scene();
+            const aspect = window.innerWidth / window.innerHeight;
+            camera = new THREE.OrthographicCamera(
+                -frustumHeight * aspect / 2, frustumHeight * aspect / 2,
+                frustumHeight / 2, -frustumHeight / 2,
+                -100, 100
+            );
+
+            // Mesh
+            geo = new THREE.BoxGeometry(4, 2, 2);
+            const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+            mesh = new THREE.Mesh(geo, mat);
+            scene.add(mesh);
+
+            // --- 新增：关联 BoxHelper ---
+            let box = new THREE.BoxHelper(mesh, colorParams.cStroke);
+            mesh.add(box);
+
+            // Helpers
+            const worldBox = new THREE.Box3().setFromObject(mesh);
+            boxHelper = new THREE.Box3Helper(worldBox, 0x00ff00);
+            boxHelper.visible = boxParams.showBoxHelper;
+            scene.add(boxHelper);
+
+            window.addEventListener('resize', onWindowResize);
+            applyAndSolve();
+            startAutoLoop();
+        }
+
+        // ==========================================
+        // 核心逻辑 (直接处理求解与渲染)
+        // ==========================================
+        function applyAndSolve() {
+            const t = parseRatio(AABBParams.targetRatio);
+            if (!isFinite(t) || t <= 0) return;
+
+            // 1. 应用变换
+            mesh.rotation.set(deg2rad(AABBParams.pitch), deg2rad(AABBParams.yaw), 0, 'XYZ');
+            mesh.updateMatrixWorld(true);
+
+            // 2. 求解并应用 scale
+            const R = getAbsR01(mesh);
+            const { hx, denom } = solveHxForWH(t, R);
+            if (Math.abs(denom) > 1e-10 && hx > 0) {
+                mesh.scale.set(hx / 2, 1, 1);
+            }
+
+            // 3. 关键：更新世界包围盒并适配相机
+            mesh.updateMatrixWorld(true);
+            const worldBox = new THREE.Box3().setFromObject(mesh);
+
+            // 调用刚才定义的适配函数
+            updateCameraZoom(worldBox);
+
+            // 4. 更新辅助线与重绘
+            boxHelper.box.setFromObject(mesh);
+            rebuildStrips();
+            renderer.render(scene, camera);
+        }
+
+        function startAutoLoop() {
+            setInterval(() => {
+                AABBParams.yaw = (Math.random() * 60) - 30;
+                AABBParams.pitch = (Math.random() * 60) - 30;
+                applyAndSolve();
+            }, 1500);
+        }
+
+        // ==========================================
+        // 笔触与辅助函数
+        // ==========================================
+        function rebuildStrips() {
+            if (!geo || !mesh) return;
+            if (!kGroup) { kGroup = new THREE.Group(); scene.add(kGroup); }
+
+            while (kGroup.children.length > 0) {
+                const m = kGroup.children[0];
+                if (m.geometry) m.geometry.dispose();
+                kGroup.remove(m);
+            }
+
+            mesh.updateMatrixWorld(true);
+
+            // 【核心修正】：
+            // 1. pxSize 是每个像素对应的世界单位
+            // 2. 我们需要一个基准 zoom (例如 1.0)，在基准下 stroke 就是 kStroke
+            // 3. 当 zoom 变大时，需要除以 zoom 来抵消缩放对视觉宽度的影响
+            const baseZoom = 1.0;
+            const absoluteStroke = boxParams.kStroke * (baseZoom / camera.zoom);
+
+            const qWorld = new THREE.Quaternion();
+            mesh.getWorldQuaternion(qWorld);
+
+            // 获取旋转轴向量
+            const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+
+            // ... 后续构建 Strip 的代码保持不变 ...
+            const s1 = makeStrip(worldVertex(geo, 5, mesh), worldVertex(geo, 7, mesh), axisX, matWhiteDS);
+            const s2 = makeStrip(worldVertex(geo, 1, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
+            const s3 = makeCenteredStrip(worldVertex(geo, 2, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5).lerp(worldVertex(geo, 1, mesh), 0.2), axisY, matWhiteDS);
+
+            kGroup.add(s1, s2, s3);
+        }
+
+        function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
+        function makeQuad(p0, p1, p2, p3, mat) {
+            const g = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]);
+            g.setIndex([0, 1, 2, 0, 2, 3]);
+            return new THREE.Mesh(g, mat);
+        }
+        function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
+        function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
+        function deg2rad(d) { return d * Math.PI / 180; }
+        function parseRatio(s) { return typeof s === 'number' ? s : (s.includes(':') ? s.split(':').reduce((a, b) => a / b) : parseFloat(s)); }
+        function getAbsR01(o) {
+            const m = new THREE.Matrix4().makeRotationFromQuaternion(o.getWorldQuaternion(new THREE.Quaternion())).elements;
+            return { a00: Math.abs(m[0]), a01: Math.abs(m[4]), a02: Math.abs(m[8]), a10: Math.abs(m[1]), a11: Math.abs(m[5]), a12: Math.abs(m[9]) };
+        }
+        function solveHxForWH(t, R) { return { hx: (t * (R.a11 + R.a12) - (R.a01 + R.a02)) / (R.a00 - t * R.a10), denom: (R.a00 - t * R.a10) }; }
+        function onWindowResize() {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -frustumHeight * aspect / 2;
+            camera.right = frustumHeight * aspect / 2;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.render(scene, camera);
+        }
+
+        function updateCameraZoom(worldBox) {
+            const size = new THREE.Vector3();
+            worldBox.getSize(size); // 获取世界坐标下的物体尺寸
+
+            // 获取当前视口宽高比
+            const aspect = window.innerWidth / window.innerHeight;
+            const frustumW = frustumHeight * aspect;
+
+            // 计算缩放：目标像素宽度 / 物体世界宽度 * 视锥宽度
+            const zoomW = (AABBParams.targetW / window.innerWidth) * frustumW / size.x;
+            const zoomH = (AABBParams.targetH / window.innerHeight) * frustumHeight / size.y;
+
+            // 取两者较小值，确保物体始终完整显示在框内
+            camera.zoom = Math.min(zoomW, zoomH);
+            camera.updateProjectionMatrix();
+        }
+    </script>
+</body>
+
+</html>

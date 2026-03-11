@@ -162,7 +162,12 @@
         let geo;
         let prevW = 400; // 初始化为你的默认宽度
         let prevH = 400; // 初始化为你的默认高度
-        const PADDING = 10;
+
+
+        // 在全局作用域里，把原来的 prevW 和 prevH 拆成两套
+        let prevBgW, prevBgH;     // 用于记录上一次的背景尺寸
+        let prevCubeW, prevCubeH; // 用于记录上一次的立方体可用尺寸
+        const PADDING = 60;
 
         let currentAnimId = null;
         const frustumHeight = 8;
@@ -234,20 +239,16 @@
         // ==========================================
         // 存储当前动画 ID 以便随时打断
 
-        // 在全局作用域里，把原来的 prevW 和 prevH 拆成两套
-        let prevBgW, prevBgH;     // 用于记录上一次的背景尺寸
-        let prevCubeW, prevCubeH; // 用于记录上一次的立方体可用尺寸
 
         function applyAndSolve() {
             const config = sequence[currentIdx];
-            const PADDING = 10;
 
             // ==========================================
             // 1. 分离计算：背景目标尺寸 vs 3D 目标尺寸
             // ==========================================
             const bgTargetW = config.w;
             const bgTargetH = config.h;
-            
+
             // 3D 立方体的实际可用空间，上下左右各缩进 PADDING
             const cubeTargetW = config.w - PADDING * 2;
             const cubeTargetH = config.h - PADDING * 2;
@@ -268,11 +269,11 @@
             // 2. 🌟 核心：计算扣除 Padding 后的全新比例 t
             // ==========================================
             // 我们直接用浮点数计算真实比例，不再使用 parseRatio(config.ratio)
-            const t = cubeTargetW / cubeTargetH; 
+            const t = cubeTargetW / cubeTargetH;
             if (!isFinite(t) || t <= 0) return;
 
             // 仅用于界面显示或记录
-            AABBParams.targetRatio = (cubeTargetW / cubeTargetH).toFixed(2); 
+            AABBParams.targetRatio = (cubeTargetW / cubeTargetH).toFixed(2);
             AABBParams.targetW = cubeTargetW;
             AABBParams.targetH = cubeTargetH;
 
@@ -294,7 +295,7 @@
 
             mesh.scale.set(targetScale, 1, 1);
             mesh.updateMatrixWorld(true);
-            
+
             // 摄像机去适配内缩后的 3D 空间
             const targetZoom = calculateTargetZoom(new THREE.Box3().setFromObject(mesh), cubeTargetW, cubeTargetH);
 
@@ -303,7 +304,8 @@
             const startTime = performance.now();
             function animate(now) {
                 const progress = Math.min((now - startTime) / duration, 1);
-                const ease = 1 - Math.pow(1 - progress, 4);
+                // 起步极快，尾速极慢，极其丝滑
+                const ease = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
 
                 mesh.quaternion.copy(startQuaternion).slerp(targetQuaternion, ease);
                 mesh.scale.set(startScale + (targetScale - startScale) * ease, 1, 1);
@@ -325,7 +327,7 @@
 
                 // 📌 摄像机变焦使用扣减后的尺寸
                 const currentTargetZoom = calculateTargetZoom(currentWorldBox, currentCubeW, currentCubeH);
-                
+
                 camera.zoom = currentTargetZoom;
                 camera.updateProjectionMatrix();
 
@@ -337,7 +339,7 @@
             }
             currentAnimId = requestAnimationFrame(animate);
         }
-        
+
         function randomExclude(min, max, absMin, absMax) {
             // 随机决定是正区间还是负区间
             const sign = Math.random() > 0.3 ? 1 : -1;
@@ -534,11 +536,11 @@
             const currentImg = loadedImages[currentImgName];
 
             // 🎯 核心修改：直接拿 Python 算好的最终尺寸，不使用动画插值
-            const fixedW = currentItem.w; 
+            const fixedW = currentItem.w;
             const fixedH = currentItem.h;
 
-            ctx.save(); 
-            ctx.translate(centerX, centerY); 
+            ctx.save();
+            ctx.translate(centerX, centerY);
 
             if (currentImg && currentImg.complete) {
                 // 使用写死的固定尺寸，始终保持完美的原始比例
@@ -547,7 +549,7 @@
                 ctx.fillStyle = '#ebebeb';
                 ctx.fillRect(-fixedW / 2, -fixedH / 2, fixedW, fixedH);
             }
-            
+
             ctx.restore();
         }
 

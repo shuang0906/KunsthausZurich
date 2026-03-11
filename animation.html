@@ -6,17 +6,17 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Logo Composer — 静态笔触版</title>
     <style>
-        body, html { margin: 0; padding: 0; overflow: hidden; }
-        #container { position: relative; width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; }
-        #bgCanvas, #rendererCanvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
     </style>
 </head>
 
 <body>
-    <div id="container">
-        <canvas id="bgCanvas" style="z-index: 1;"></canvas>
-        <canvas id="rendererCanvas" style="z-index: 2;"></canvas>
-    </div>
+    <canvas id="rendererCanvas"></canvas>
 
     <script type="importmap">
         {
@@ -29,37 +29,80 @@
     <script type="module">
         import * as THREE from 'three';
 
-        let renderer, scene, camera, mesh, kGroup;
+        let renderer, scene, cameraArray, mesh, kGroup;
         const geo = new THREE.BoxGeometry(4, 2, 2);
-        const matWhiteDS = new THREE.MeshBasicMaterial({ color: '#000000', side: THREE.DoubleSide });
+        const matWhiteDS = new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.DoubleSide });
+        const AMOUNT = 4
+        const COLS = 8;
+        const ROWS = 4;
 
         init();
 
         function init() {
             const canvasElement = document.getElementById('rendererCanvas');
             renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true, alpha: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
+            const dpr = window.devicePixelRatio;
+            renderer.setPixelRatio(dpr);
             renderer.setSize(window.innerWidth, window.innerHeight);
 
             scene = new THREE.Scene();
-            const aspect = window.innerWidth / window.innerHeight;
-            camera = new THREE.OrthographicCamera(-4 * aspect, 4 * aspect, 4, -4, -100, 100);
-            camera.position.set(5, 5, 5);
-            camera.lookAt(0, 0, 0);
+            scene.background = new THREE.Color(0x000000); // 渲染器背景变红
+
+            const cameras = [];
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    // 1. 计算单个子视口的分辨率长宽比
+                    const subWidth = window.innerWidth / COLS;
+                    const subHeight = window.innerHeight / ROWS;
+                    const aspect = subWidth / subHeight;
+
+                    // 2. 创建正交相机
+                    const subCam = new THREE.OrthographicCamera(-4 * aspect, 4 * aspect, 4, -4, -100, 100);
+
+                    // 3. 设置视口 (Viewport)
+                    // 注意：Three.js Viewport 的 Y 轴是从底部向上算的
+                    // (y / ROWS) * window.innerHeight 会让 y=0 出现在屏幕底部
+                    subCam.viewport = new THREE.Vector4(
+                        x * subWidth,
+                        (ROWS - 1 - y) * subHeight, // 翻转 Y，使第 0 行出现在顶部
+                        subWidth,
+                        subHeight
+                    );
+
+                    // 4. 设置位置与朝向
+                    subCam.position.set(0, 0, 0);
+                    subCam.lookAt(0, 0, 0);
+
+                    cameras.push(subCam);
+                }
+            }
+            // 最后创建 ArrayCamera
+            cameraArray = new THREE.ArrayCamera(cameras);
+            cameraArray.position.set(0, 0, 0); // ArrayCamera 本身不需要位置
 
             // 核心物体
             const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
             mesh = new THREE.Mesh(geo, mat);
             scene.add(mesh);
 
+            let box = new THREE.BoxHelper(mesh, "#ffffff");
+            mesh.add(box);
+
             // 初始化笔触容器
             kGroup = new THREE.Group();
             scene.add(kGroup);
 
             window.addEventListener('resize', onWindowResize);
-            
+
             rebuildStrips();
-            renderer.render(scene, camera);
+
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            // ... CameraArray 初始化 ...
+            // 注意：确保创建时传入的 cameras 数组在 init 末尾更新一次视口
+            updateViewports();
+            renderer.render(scene, cameraArray);
         }
 
         // ==========================================
@@ -98,13 +141,66 @@
         function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
 
         function onWindowResize() {
-            const aspect = window.innerWidth / window.innerHeight;
-            camera.left = -4 * aspect;
-            camera.right = 4 * aspect;
-            camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.render(scene, camera);
+            updateViewports(); // 保持 Resize 时同步视口
+            renderer.render(scene, cameraArray);
         }
+
+        function updateViewports() {
+            // 1. 获取物理像素尺寸
+            const w = renderer.domElement.width;
+            const h = renderer.domElement.height;
+
+            // 2. 根据全局常量计算单个子窗口的物理像素宽高
+            const subW = w / COLS;
+            const subH = h / ROWS;
+
+            cameraArray.cameras.forEach((cam, i) => {
+                // 3. 将线性索引 i 转换为网格坐标
+                // 假设 cameras 数组是按行优先顺序 push 进去的（即先填满第一行，再到第二行）
+                const x = i % COLS;          // 当前列索引 (0-7)
+                const y = Math.floor(i / COLS); // 当前行索引 (0-3)
+
+                // 4. 设置视口
+                // WebGL Viewport 原点在左下角，(ROWS - 1 - y) 确保视觉上第一行在屏幕顶部
+                cam.viewport.set(
+                    x * subW,
+                    (ROWS - 1 - y) * subH,
+                    subW,
+                    subH
+                );
+
+                // 5. 更新正交相机的投影矩阵以防拉伸
+                const aspect = subW / subH;
+                cam.left = -4 * aspect;
+                cam.right = 4 * aspect;
+                cam.top = 4;
+                cam.bottom = -4;
+                cam.updateProjectionMatrix();
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // 1. 获取当前时间
+            const time = Date.now() * 0.0005;
+
+            // 2. 旋转物体 (或者像案例那样让物体在原点转动)
+            mesh.rotation.x = Math.sin(time) * 0.5;
+            mesh.rotation.y = Math.cos(time) * 0.5;
+
+            // 3. 实时更新笔触（因为物体转动了，笔触位置需要跟随 mesh 更新）
+            rebuildStrips();
+
+            // 4. 渲染 ArrayCamera
+            renderer.render(scene, cameraArray);
+        }
+
+        // 启动循环
+        animate();
+
     </script>
 </body>
+
 </html>

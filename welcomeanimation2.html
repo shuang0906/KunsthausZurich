@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Logo Composer — 多视口单相机版</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="rendererCanvas"></canvas>
+
+    <button id="recordBtn" style="
+    position: absolute; 
+    bottom: 20px; 
+    left: 50%; 
+    transform: translateX(-50%);
+    padding: 10px 20px;
+    font-size: 16px;
+    background-color: #ff4757;
+    color: white;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+    z-index: 1000;
+    font-weight: bold;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+">🔴 Record Loop (4s)</button>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // 1. 全局变量提升，确保所有函数都能访问
+        let renderer, scene, camera, mesh, kGroup, world, geo, matWhiteDS;
+        const COLS = 6;
+        const ROWS = 5;
+        const totalCells = COLS * ROWS;
+        const frustumHeight = 3.8;
+
+        init();
+
+        function init() {
+            const canvasElement = document.getElementById('rendererCanvas');
+            renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            // 开启裁剪测试，这是实现多视口分屏的关键
+            renderer.setScissorTest(true);
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xffffff);
+
+            world = new THREE.Group();
+            scene.add(world);
+
+            // 2. 只创建一个正交相机
+            const subWidth = window.innerWidth / COLS;
+            const subHeight = window.innerHeight / ROWS;
+            const aspect = subWidth / subHeight;
+            camera = new THREE.OrthographicCamera(
+                -frustumHeight * aspect / 2, frustumHeight * aspect / 2,
+                frustumHeight / 2, -frustumHeight / 2,
+                -100, 100
+            );
+            // 给相机一个 Z 轴位置，才能看到原点的物体
+            camera.position.set(0, 0, 10);
+            camera.lookAt(0, 0, 0);
+
+            // 3. 初始化全局几何体和材质
+            geo = new THREE.BoxGeometry(4, 2, 2);
+            matWhiteDS = new THREE.MeshBasicMaterial({ color: '#000000', side: THREE.DoubleSide });
+            const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+
+            // 4. 创建核心物体
+            mesh = new THREE.Mesh(geo, mat);
+            scene.add(mesh);
+
+            let box = new THREE.BoxHelper(mesh, "#000000");
+            mesh.add(box);
+
+            kGroup = new THREE.Group();
+            scene.add(kGroup);
+
+            mesh.rotation.x = THREE.MathUtils.degToRad(15);
+            mesh.rotation.y = THREE.MathUtils.degToRad(15);
+
+            window.addEventListener('resize', onWindowResize);
+
+            // 启动循环
+            animate();
+            setupRecorder();
+        }
+
+        // ==========================================
+        // 渲染与动画循环
+        // ==========================================
+        function animate() {
+            requestAnimationFrame(animate);
+            const now = Date.now() * 0.001;
+
+            const subW = window.innerWidth / COLS;
+            const subH = window.innerHeight / ROWS;
+
+            // 1. 定义你要求的绝对基础角度 (X: 15度, Y: 20度)
+            const baseX = THREE.MathUtils.degToRad(15);
+            const baseY = THREE.MathUtils.degToRad(20);
+            const baseZ = 0;
+
+            // 遍历渲染每一个格子
+            for (let i = 0; i < totalCells; i++) {
+                // --- 2. 计算每个格子的时间轴 ---
+                let totalTime = 4.0;       // 完整周期 4 秒
+                const delaySpread = 0.3;
+                const startDelay = (i / totalCells) * totalTime * delaySpread;
+
+                // 获取减去延迟后的当前时间
+                let currentTime = now - startDelay;
+                // 获取当前周期内的时间 (0 到 totalTime)
+                let t = (currentTime % totalTime + totalTime) % totalTime;
+
+                // 算出 0 到 1 的基础进度
+                let progress = t / totalTime;
+
+                // --- 3. 核心魔法：混合最低速度与缓动 ---
+
+                // A. 纯匀速进度 (保证永远在动)
+                let linearProgress = progress;
+
+                // B. 缓动进度 (这里使用干脆利落的 Cubic Ease)
+                let easedProgress = progress < 0.5
+                    ? 4 * progress * progress * progress
+                    : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+                // C. 混合：设置最低速度比例 (例如 0.15 表示最低保持 15% 的基础速度)
+                const minSpeedWeight = 0.15; // 👈 调整这个值！值越大越接近匀速，值越小停顿感越强
+
+                let mixedProgress = (linearProgress * minSpeedWeight) + (easedProgress * (1 - minSpeedWeight));
+
+                // 映射为 0 到 2π 的一个完整圆周
+                const angle = mixedProgress * Math.PI * 2;
+
+                // --- 4. 应用运动状态 (无缝圆周翻滚) ---
+                // X 轴用 sin
+                let rotX = baseX + Math.sin(angle) * 0.5;
+                // Y 轴用 cos，减去 0.5 拉回原点
+                let rotY = baseY - 0.5 + Math.cos(angle) * 0.5;
+
+                // --- 5. 应用旋转 ---
+                mesh.position.set(0, 0, 0);
+                mesh.rotation.x = rotX;
+                mesh.rotation.y = rotY;
+
+                // --- 6. 重建笔触 ---
+                rebuildStrips();
+
+                // --- 7. 设置分屏视口并渲染 ---
+                const x = i % COLS;
+                const y = Math.floor(i / COLS);
+                const rectX = x * subW;
+                const rectY = (ROWS - 1 - y) * subH;
+
+                renderer.setViewport(rectX, rectY, subW, subH);
+                renderer.setScissor(rectX, rectY, subW, subH);
+
+                renderer.render(scene, camera);
+            }
+
+        }
+        // ==========================================
+        // 笔触与辅助函数
+        // ==========================================
+        function rebuildStrips() {
+            if (!geo || !mesh) return;
+
+            // 清理旧笔触
+            while (kGroup.children.length > 0) {
+                const m = kGroup.children[0];
+                if (m.geometry) m.geometry.dispose();
+                kGroup.remove(m);
+            }
+
+            // 更新世界矩阵，抓取最新的顶点坐标
+            mesh.updateMatrixWorld(true);
+            const absoluteStroke = 0.2;
+
+            const qWorld = new THREE.Quaternion();
+            mesh.getWorldQuaternion(qWorld);
+
+            const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+
+            const s1 = makeStrip(worldVertex(geo, 5, mesh), worldVertex(geo, 7, mesh), axisX, matWhiteDS);
+            const s2 = makeStrip(worldVertex(geo, 1, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
+            const s3 = makeCenteredStrip(worldVertex(geo, 2, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5).lerp(worldVertex(geo, 1, mesh), 0.2), axisY, matWhiteDS);
+
+            s1.frustumCulled = false;
+            s2.frustumCulled = false;
+            s3.frustumCulled = false;
+
+            kGroup.add(s1, s2, s3);
+        }
+
+        function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
+        function makeQuad(p0, p1, p2, p3, mat) {
+            const g = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]);
+            g.setIndex([0, 1, 2, 0, 2, 3]);
+            return new THREE.Mesh(g, mat);
+        }
+        function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
+        function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
+
+        function onWindowResize() {
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            const subW = window.innerWidth / COLS;
+            const subH = window.innerHeight / ROWS;
+            const aspect = subW / subH;
+
+            // 更新单相机的比例
+            camera.left = -frustumHeight * aspect / 2;
+            camera.right = frustumHeight * aspect / 2;
+            camera.top = frustumHeight / 2;
+            camera.bottom = -frustumHeight / 2;
+            camera.updateProjectionMatrix();
+        }
+
+        // ==========================================
+        // 录制完美循环视频逻辑
+        // ==========================================
+        function setupRecorder() {
+            const btn = document.getElementById('recordBtn');
+            const canvas = renderer.domElement; // 获取 Three.js 的画布
+
+            let mediaRecorder;
+            let recordedChunks = [];
+            let isRecording = false;
+
+            // 我们的完美循环时间是 4 秒
+            const LOOP_DURATION = 4000;
+            const FPS = 60; // 录制帧率
+
+            btn.addEventListener('click', () => {
+                if (isRecording) return; // 防止重复点击
+
+                // 1. 从 Canvas 捕获视频流
+                const stream = canvas.captureStream(FPS);
+
+                // 2. 配置 MediaRecorder (尽量使用高质量的 vp9 编码)
+                const options = { mimeType: 'video/webm; codecs=vp9' };
+                try {
+                    mediaRecorder = new MediaRecorder(stream, options);
+                } catch (e) {
+                    console.warn('VP9 不支持，回退到默认编码', e);
+                    mediaRecorder = new MediaRecorder(stream); // 回退方案
+                }
+
+                // 3. 收集视频数据片段
+                mediaRecorder.ondataavailable = function (event) {
+                    if (event.data.size > 0) {
+                        recordedChunks.push(event.data);
+                    }
+                };
+
+                // 4. 录制结束时的处理逻辑：打包并下载
+                mediaRecorder.onstop = function () {
+                    // 将所有片段合并成一个 Blob 对象
+                    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+
+                    // 创建一个临时的下载链接
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = 'perfect-loop.webm'; // 下载的文件名
+
+                    document.body.appendChild(a);
+                    a.click(); // 触发下载
+
+                    // 清理垃圾
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+
+                    // 恢复按钮状态
+                    recordedChunks = [];
+                    isRecording = false;
+                    btn.innerText = '🔴 Record Loop (4s)';
+                    btn.style.backgroundColor = '#ff4757';
+                };
+
+                // 5. 正式开始录制
+                mediaRecorder.start();
+                isRecording = true;
+
+                // 改变按钮视觉反馈
+                btn.innerText = '⏳ Recording...';
+                btn.style.backgroundColor = '#ffa502';
+
+                // 6. 设定定时器：4秒后自动停止录制！
+                setTimeout(() => {
+                    mediaRecorder.stop();
+                }, LOOP_DURATION);
+            });
+        }
+
+        // 别忘了在 init() 函数的末尾调用它！
+        // setupRecorder();
+    </script>
+</body>
+
+</html>

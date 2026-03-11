@@ -29,12 +29,12 @@
     <script type="module">
         import * as THREE from 'three';
 
-        let renderer, scene, cameraArray, mesh, kGroup;
+        let renderer, scene, cameraArray, mesh, kGroup, world;
         const geo = new THREE.BoxGeometry(4, 2, 2);
         const matWhiteDS = new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.DoubleSide });
-        const AMOUNT = 4
-        const COLS = 8;
-        const ROWS = 4;
+        const COLS = 6;
+        const ROWS = 5;
+        const frustumHeight = 5;
 
         init();
 
@@ -48,6 +48,12 @@
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x000000); // 渲染器背景变红
 
+                world = new THREE.Group();
+    scene.add(world);
+
+    world.rotation.x = THREE.MathUtils.degToRad(15);
+    world.rotation.y = THREE.MathUtils.degToRad(20);
+    
             const cameras = [];
             for (let y = 0; y < ROWS; y++) {
                 for (let x = 0; x < COLS; x++) {
@@ -57,14 +63,18 @@
                     const aspect = subWidth / subHeight;
 
                     // 2. 创建正交相机
-                    const subCam = new THREE.OrthographicCamera(-4 * aspect, 4 * aspect, 4, -4, -100, 100);
+                    const subCam = new THREE.OrthographicCamera(
+                        -frustumHeight * aspect / 2, frustumHeight * aspect / 2,
+                        frustumHeight / 2, -frustumHeight / 2,
+                        -100, 100
+                    );
 
                     // 3. 设置视口 (Viewport)
                     // 注意：Three.js Viewport 的 Y 轴是从底部向上算的
                     // (y / ROWS) * window.innerHeight 会让 y=0 出现在屏幕底部
                     subCam.viewport = new THREE.Vector4(
                         x * subWidth,
-                        (ROWS - 1 - y) * subHeight, // 翻转 Y，使第 0 行出现在顶部
+                        y * subHeight, // 翻转 Y，使第 0 行出现在顶部
                         subWidth,
                         subHeight
                     );
@@ -82,6 +92,7 @@
 
             // 核心物体
             const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+
             mesh = new THREE.Mesh(geo, mat);
             scene.add(mesh);
 
@@ -91,6 +102,9 @@
             // 初始化笔触容器
             kGroup = new THREE.Group();
             scene.add(kGroup);
+
+            mesh.rotation.x = THREE.MathUtils.degToRad(15);
+            mesh.rotation.y = THREE.MathUtils.degToRad(15);
 
             window.addEventListener('resize', onWindowResize);
 
@@ -109,7 +123,9 @@
         // 笔触与辅助函数
         // ==========================================
         function rebuildStrips() {
-            if (!kGroup) return;
+            if (!geo || !mesh) return;
+            if (!kGroup) { kGroup = new THREE.Group(); scene.add(kGroup); }
+
             while (kGroup.children.length > 0) {
                 const m = kGroup.children[0];
                 if (m.geometry) m.geometry.dispose();
@@ -117,16 +133,21 @@
             }
 
             mesh.updateMatrixWorld(true);
-            const absoluteStroke = 0.15 / 1.0; // 基于基准 zoom 计算
+            const absoluteStroke = 0.2;
+
             const qWorld = new THREE.Quaternion();
             mesh.getWorldQuaternion(qWorld);
 
+            // 获取旋转轴向量
             const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
             const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
 
+            // ... 后续构建 Strip 的代码保持不变 ...
             const s1 = makeStrip(worldVertex(geo, 5, mesh), worldVertex(geo, 7, mesh), axisX, matWhiteDS);
             const s2 = makeStrip(worldVertex(geo, 1, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
             const s3 = makeCenteredStrip(worldVertex(geo, 2, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5).lerp(worldVertex(geo, 1, mesh), 0.2), axisY, matWhiteDS);
+
+            s1.frustumCulled = false;
 
             kGroup.add(s1, s2, s3);
         }
@@ -139,6 +160,7 @@
         }
         function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
         function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
+        function deg2rad(d) { return d * Math.PI / 180; }
 
         function onWindowResize() {
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -165,23 +187,24 @@
                 // WebGL Viewport 原点在左下角，(ROWS - 1 - y) 确保视觉上第一行在屏幕顶部
                 cam.viewport.set(
                     x * subW,
-                    (ROWS - 1 - y) * subH,
+                    y * subH,
                     subW,
                     subH
                 );
 
                 // 5. 更新正交相机的投影矩阵以防拉伸
                 const aspect = subW / subH;
-                cam.left = -4 * aspect;
-                cam.right = 4 * aspect;
-                cam.top = 4;
-                cam.bottom = -4;
+                cam.left = -frustumHeight * aspect / 2;
+                cam.right = frustumHeight * aspect / 2;
+                cam.top = frustumHeight / 2;
+                cam.bottom = -frustumHeight / 2;
                 cam.updateProjectionMatrix();
             });
         }
 
-        function animate() {
-            requestAnimationFrame(animate);
+        //同时
+        function animate1() {
+            requestAnimationFrame(animate1);
 
             // 1. 获取当前时间
             const time = Date.now() * 0.0005;
@@ -192,13 +215,76 @@
 
             // 3. 实时更新笔触（因为物体转动了，笔触位置需要跟随 mesh 更新）
             rebuildStrips();
-
-            // 4. 渲染 ArrayCamera
             renderer.render(scene, cameraArray);
         }
 
+        //相差
+        function animate2() {
+
+            requestAnimationFrame(animate2);
+            const time = Date.now() * 0.001;
+
+            cameraArray.cameras.forEach((cam, i) => {
+                const x = i % COLS;
+                const y = Math.floor(i / COLS);
+
+                // 1. 给每个相机一个微小的平移偏移
+                // 这会让每个格子看到的“中心”发生位移，效果比旋转更明显
+                const offsetX = Math.sin(time + x * 10) * 0.2;
+                const offsetY = Math.cos(time + y * 10) * 0.2;
+
+                // 注意：这是修改相机的 ProjectionMatrix 的偏移
+                // 让每个窗口看到的物体坐标产生视差
+                cam.projectionMatrix.elements[8] = offsetX;
+                cam.projectionMatrix.elements[9] = offsetY;
+            });
+
+            rebuildStrips();
+            renderer.render(scene, cameraArray);
+        }
+
+        //相差停顿
+        // function animate3() {
+        //     let totalTime = 2;
+        //     const activeDuration = 1.5;
+        //     requestAnimationFrame(animate3);
+        //     const time = Date.now() * 0.01;
+
+        //     cameraArray.cameras.forEach((cam, i) => {
+        //         // 1. 给每个格子一个独特的“出生点”
+        //         // i / 32 将所有相机平均分布到 [0, 1] 的时间轴上
+        //         const startDelay =  (i / 32) * totalTime; // 整个周期是 4 秒，每个格子错开出生
+
+        //         // 2. 限制每个格子的活跃时间
+        //         // 假设每个格子只动 1 秒，剩下 3 秒停
+        //         const cycleTime = (Date.now() * 0.001) % totalTime; //  全局 4 秒循环
+
+        //         // 3. 计算相对时间
+        //         let t = (cycleTime - startDelay + totalTime) % totalTime;
+
+        //         // 4. 只有在 activeDuration 内才运动
+        //         let offset = 0;
+        //         if (t < activeDuration) {
+        //             // 这一段是该格子专属的运动时间
+        //             const progress = t / activeDuration;
+        //             const ease = progress * progress * (3 - 2 * progress);
+        //             offset = Math.sin(ease * Math.PI) * 0.2;
+        //         } else {
+        //             // 这一段是该格子的停顿时间
+        //             offset = 0;
+        //         }
+
+        //         // 应用偏移
+        //         cam.projectionMatrix.elements[8] = offset;
+        //         cam.projectionMatrix.elements[9] = offset;
+        //     });
+
+        //     rebuildStrips();
+        //     renderer.render(scene, cameraArray);
+        // }
+
         // 启动循环
-        animate();
+        animate1();
 
     </script>
 </body>

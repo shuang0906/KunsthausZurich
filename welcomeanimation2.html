@@ -4,6 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <script src="https://unpkg.com/ccapture.js@1.1.0/build/CCapture.all.min.js"></script>
     <title>Logo Composer — 多视口单相机版</title>
     <style>
         body,
@@ -47,6 +48,23 @@
     <script type="module">
         import * as THREE from 'three';
 
+        // === CCapture 录制配置 ===
+const FPS = 30;
+const TOTAL_SECONDS = 4.0; // 你的完美循环周期
+const TOTAL_FRAMES = FPS * TOTAL_SECONDS; // 240 帧
+
+let isRecording = false;
+let currentFrame = 0;
+
+// 初始化 CCapture
+const capturer = new CCapture({
+    format: 'webm',
+    framerate: FPS,
+    verbose: true,     // 在控制台打印进度
+    display: true,     // 在页面右上角显示一个小小的录制进度条
+    quality: 100       // 视频质量拉满
+});
+
         // 1. 全局变量提升，确保所有函数都能访问
         let renderer, scene, camera, mesh, kGroup, world, geo, matWhiteDS;
         const COLS = 6;
@@ -59,7 +77,7 @@
         function init() {
             const canvasElement = document.getElementById('rendererCanvas');
             renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true, alpha: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setPixelRatio(window.devicePixelRatio* 2);
             renderer.setSize(window.innerWidth, window.innerHeight);
             // 开启裁剪测试，这是实现多视口分屏的关键
             renderer.setScissorTest(true);
@@ -92,7 +110,7 @@
             mesh = new THREE.Mesh(geo, mat);
             scene.add(mesh);
 
-            let box = new THREE.BoxHelper(mesh, "#000000");
+            let box = new THREE.BoxHelper(mesh, "#bebebe");
             mesh.add(box);
 
             kGroup = new THREE.Group();
@@ -105,7 +123,6 @@
 
             // 启动循环
             animate();
-            setupRecorder();
         }
 
         // ==========================================
@@ -113,8 +130,14 @@
         // ==========================================
         function animate() {
             requestAnimationFrame(animate);
-            const now = Date.now() * 0.001;
-
+            let now;
+            if (isRecording) {
+                // 录制模式：强制时间为 绝对帧数 / FPS，绝对不跳帧
+                now = currentFrame / FPS; 
+            } else {
+                // 正常游玩模式：使用真实系统时间
+                now = Date.now() * 0.001; 
+            }
             const subW = window.innerWidth / COLS;
             const subH = window.innerHeight / ROWS;
 
@@ -182,8 +205,24 @@
                 renderer.render(scene, camera);
             }
 
-        }
-        // ==========================================
+// ==========================================
+            // 2. 捕获这一帧，并判断是否结束
+            // ==========================================
+            if (isRecording) {
+                // 把画好的 Canvas 喂给 CCapture
+                capturer.capture(renderer.domElement);
+                currentFrame++;
+
+                // 如果已经录满了规定的总帧数 (240帧)
+                if (currentFrame >= TOTAL_FRAMES) {
+                    isRecording = false;
+                    capturer.stop();
+                    capturer.save(); // 浏览器会自动弹窗下载完美循环的 webm 文件
+                    
+                    console.log("✅ 录制完成！");
+                }
+            }
+        }        // ==========================================
         // 笔触与辅助函数
         // ==========================================
         function rebuildStrips() {
@@ -243,83 +282,15 @@
         // ==========================================
         // 录制完美循环视频逻辑
         // ==========================================
-        function setupRecorder() {
-            const btn = document.getElementById('recordBtn');
-            const canvas = renderer.domElement; // 获取 Three.js 的画布
-
-            let mediaRecorder;
-            let recordedChunks = [];
-            let isRecording = false;
-
-            // 我们的完美循环时间是 4 秒
-            const LOOP_DURATION = 4000;
-            const FPS = 60; // 录制帧率
-
-            btn.addEventListener('click', () => {
-                if (isRecording) return; // 防止重复点击
-
-                // 1. 从 Canvas 捕获视频流
-                const stream = canvas.captureStream(FPS);
-
-                // 2. 配置 MediaRecorder (尽量使用高质量的 vp9 编码)
-                const options = { mimeType: 'video/webm; codecs=vp9' };
-                try {
-                    mediaRecorder = new MediaRecorder(stream, options);
-                } catch (e) {
-                    console.warn('VP9 不支持，回退到默认编码', e);
-                    mediaRecorder = new MediaRecorder(stream); // 回退方案
-                }
-
-                // 3. 收集视频数据片段
-                mediaRecorder.ondataavailable = function (event) {
-                    if (event.data.size > 0) {
-                        recordedChunks.push(event.data);
-                    }
-                };
-
-                // 4. 录制结束时的处理逻辑：打包并下载
-                mediaRecorder.onstop = function () {
-                    // 将所有片段合并成一个 Blob 对象
-                    const blob = new Blob(recordedChunks, { type: 'video/webm' });
-
-                    // 创建一个临时的下载链接
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.style.display = 'none';
-                    a.href = url;
-                    a.download = 'perfect-loop.webm'; // 下载的文件名
-
-                    document.body.appendChild(a);
-                    a.click(); // 触发下载
-
-                    // 清理垃圾
-                    window.URL.revokeObjectURL(url);
-                    document.body.removeChild(a);
-
-                    // 恢复按钮状态
-                    recordedChunks = [];
-                    isRecording = false;
-                    btn.innerText = '🔴 Record Loop (4s)';
-                    btn.style.backgroundColor = '#ff4757';
-                };
-
-                // 5. 正式开始录制
-                mediaRecorder.start();
-                isRecording = true;
-
-                // 改变按钮视觉反馈
-                btn.innerText = '⏳ Recording...';
-                btn.style.backgroundColor = '#ffa502';
-
-                // 6. 设定定时器：4秒后自动停止录制！
-                setTimeout(() => {
-                    mediaRecorder.stop();
-                }, LOOP_DURATION);
-            });
-        }
-
-        // 别忘了在 init() 函数的末尾调用它！
-        // setupRecorder();
+   document.getElementById('recordBtn').addEventListener('click', () => {
+    if (isRecording) return;
+    
+    isRecording = true;
+    currentFrame = 0; // 重置帧数
+    capturer.start(); // 启动录制器
+    
+    console.log("🎬 开始逐帧录制！期间画面会非常卡顿，请耐心等待...");
+});
     </script>
 </body>
 

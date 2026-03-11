@@ -1,9 +1,8 @@
-        
         .fragment-mono-regular {
-  font-family: "Fragment Mono", monospace;
-  font-weight: 400;
-  font-style: normal;
-}
+            font-family: "Fragment Mono", monospace;
+            font-weight: 400;
+            font-style: normal;
+        }
 
 
         body {
@@ -18,7 +17,7 @@
         .dashline {
             stroke-dasharray: 4 2;
         }
-        
+
         .lil-gui {
             --background-color: #ffffff;
             --text-color: #000;
@@ -38,9 +37,10 @@
                 border-right: 2px solid var(--hover-color);
             }
 
-            .title{
+            .title {
                 font-weight: 400;
             }
+
             .children .title:hover {
                 --title-background-color: #ebebeb;
             }
@@ -59,15 +59,15 @@
                 white-space: pre-wrap;
             }
 
-                .disabled{
-                    opacity: 1 !important;
-                }
+            .disabled {
+                opacity: 1 !important;
+            }
 
-                button:disabled {
-                    background-color: #ffffff !important;
-                    color: black !important;
-                    cursor: not-allowed;
-                }
+            button:disabled {
+                background-color: #ffffff !important;
+                color: black !important;
+                cursor: not-allowed;
+            }
 
         }
 

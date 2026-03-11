@@ -5,6 +5,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Logo Composer — 精简版</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <style>
         svg {
@@ -470,7 +473,7 @@
             });
 
             // 4. 绘制数值文字
-            ctx.font = '12px Arial';
+            ctx.font = 'regular 12px Fragment Mono';
             ctx.textAlign = 'center';
             const midX = (start.x + end.x) / 2;
             const midY = (start.y + end.y) / 2;

@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Logo Composer — 精简版 (DOM 背景版)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&display=swap" rel="stylesheet">
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #fff; /* 防止背景透明发黑 */
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* ==========================================
+           🌟 新增：DOM 背景层样式
+           ========================================== */
+        #bgLayer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1;
+        }
+
+        #bgBase {
+            position: absolute;
+            background-color: #ebebeb;
+            box-shadow: 2px 2px 3px rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            /* 宽高由 JS 动画驱动 */
+        }
+
+        #bgImage {
+            position: absolute;
+            object-fit: cover; /* 核心：完美裁切不拉伸！ */
+            /* 宽高由 JS 动画驱动 */
+        }
+
+        #rendererCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none; /* 让鼠标事件可以穿透到下层 */
+            filter: drop-shadow(10px 20px 30px rgba(0, 0, 0, 0.4));
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <div id="bgLayer">
+            <div id="bgBase">
+                <img id="bgImage" src="" alt="Museum Art">
+            </div>
+        </div>
+        <canvas id="rendererCanvas"></canvas>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.125.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // ==========================================
+        // 核心控制参数
+        // ==========================================
+        const AABBParams = {
+            targetRatio: "1:1",
+            pitch: 15,
+            yaw: -15,
+            targetW: 600,
+            targetH: 600
+        };
+
+        const sequence = [
+            { "ratio": "3:2", "w": 400, "h": 267.0, "name": "KJM_Haul_q16GQEo.max-800x800.jpg" },
+            { "ratio": "55:68", "w": 400, "h": 494.59, "name": "MARKE0070.max-800x800.jpg" },
+            { "ratio": "43:53", "w": 400, "h": 493.07, "name": "MARKE0101_V1.max-800x800.jpg" },
+            { "ratio": "37:29", "w": 400, "h": 313.5, "name": "MARKE0127.max-800x800.jpg" },
+            { "ratio": "1:1", "w": 400, "h": 400.0, "name": "MARKE0141.max-800x800.jpg" },
+            { "ratio": "5:6", "w": 400, "h": 479.76, "name": "MARKE0165.max-800x800.jpg" },
+            { "ratio": "31:21", "w": 400, "h": 271.0, "name": "MARKE0178.max-800x800.jpg" },
+            { "ratio": "26:31", "w": 400, "h": 476.9, "name": "MARKE0302.max-800x800.jpg" },
+            { "ratio": "101:63", "w": 400, "h": 249.5, "name": "MARKE0313.max-800x800.jpg" }
+        ];
+        let currentIdx = 0;
+
+        const loadedImages = {};
+        const imageFolderPath = '../assets/images/KerryJamesMarshall/'; 
+        sequence.forEach(item => {
+            const img = new Image();
+            img.src = imageFolderPath + item.name;
+            loadedImages[item.name] = img;
+        });
+
+        const boxParams = {
+            kStroke: 0.15,
+            showBoxHelper: true
+        };
+
+        const colorParams = {
+            cStroke: '#FFF',
+        };
+
+        // ==========================================
+        // 全局变量
+        // ==========================================
+        let renderer, scene, camera, mesh, boxHelper, kGroup;
+        let geo;
+        
+        let prevBgW, prevBgH;     
+        let prevCubeW, prevCubeH; 
+        const PADDING = 60; // 此 PADDING 用于 3D 内部缩进
+        const BG_PADDING = 60; // 🌟 灰色底座比图片大出的尺寸 (上下左右各30px)
+
+        let currentAnimId = null;
+        const frustumHeight = 8;
+        const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
+
+        const animationModes = {
+            smooth: { duration: 1000, interval: "4000" },
+            snappy: { duration: 500, interval: "500" }
+        };
+
+        let currentMode = 'snappy'; 
+        const mode = animationModes[currentMode];
+        let yaw, pitch;
+
+        const duration = mode.duration;
+        const interval = mode.interval;
+
+        // 获取 DOM 元素
+        const bgBaseEl = document.getElementById('bgBase');
+        const bgImageEl = document.getElementById('bgImage');
+
+        init();
+
+        function init() {
+            const canvasElement = document.getElementById('rendererCanvas');
+
+            renderer = new THREE.WebGLRenderer({
+                canvas: canvasElement,
+                antialias: true,
+                alpha: true // 保持透明，让底层 DOM 漏出来
+            });
+
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            scene = new THREE.Scene();
+            const aspect = window.innerWidth / window.innerHeight;
+            camera = new THREE.OrthographicCamera(
+                -frustumHeight * aspect / 2, frustumHeight * aspect / 2,
+                frustumHeight / 2, -frustumHeight / 2,
+                -100, 100
+            );
+
+            geo = new THREE.BoxGeometry(4, 2, 2);
+            const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+            mesh = new THREE.Mesh(geo, mat);
+            scene.add(mesh);
+
+            let box = new THREE.BoxHelper(mesh, colorParams.cStroke);
+            mesh.add(box);
+
+            const worldBox = new THREE.Box3().setFromObject(mesh);
+            boxHelper = new THREE.Box3Helper(worldBox, 0x00ff00);
+            boxHelper.visible = boxParams.showBoxHelper;
+
+            window.addEventListener('resize', onWindowResize);
+            
+            // 初始化第一张图
+            bgImageEl.src = loadedImages[sequence[currentIdx].name].src;
+            applyAndSolve();
+            startAutoLoop();
+        }
+
+        function applyAndSolve() {
+            const config = sequence[currentIdx];
+
+            // 🌟 切换图片源（从预加载好的字典里直接拿 src）
+            if (loadedImages[config.name]) {
+                bgImageEl.src = loadedImages[config.name].src;
+            }
+
+            const bgTargetW = config.w;
+            const bgTargetH = config.h;
+
+            const cubeTargetW = config.w - PADDING * 2;
+            const cubeTargetH = config.h - PADDING * 2;
+
+            const startBgW = prevBgW || bgTargetW;
+            const startBgH = prevBgH || bgTargetH;
+            const startCubeW = prevCubeW || cubeTargetW;
+            const startCubeH = prevCubeH || cubeTargetH;
+
+            prevBgW = bgTargetW;
+            prevBgH = bgTargetH;
+            prevCubeW = cubeTargetW;
+            prevCubeH = cubeTargetH;
+
+            const t = cubeTargetW / cubeTargetH;
+            if (!isFinite(t) || t <= 0) return;
+
+            AABBParams.targetRatio = (cubeTargetW / cubeTargetH).toFixed(2);
+            AABBParams.targetW = cubeTargetW;
+            AABBParams.targetH = cubeTargetH;
+
+            const targetRot = new THREE.Euler(deg2rad(AABBParams.pitch), deg2rad(AABBParams.yaw), 0, 'XYZ');
+            const tempMesh = new THREE.Mesh(geo, new THREE.MeshNormalMaterial());
+            tempMesh.rotation.copy(targetRot);
+            tempMesh.updateMatrixWorld(true);
+
+            const R = getAbsR01(tempMesh);
+            const { hx, denom } = solveHxForWH(t, R);
+            const targetScale = (Math.abs(denom) > 1e-10 && hx > 0) ? hx / 2 : 0.5;
+
+            const startQuaternion = mesh.quaternion.clone();
+            const targetQuaternion = new THREE.Quaternion().setFromEuler(targetRot);
+            const startScale = mesh.scale.x;
+
+            mesh.scale.set(targetScale, 1, 1);
+            mesh.updateMatrixWorld(true);
+
+            if (currentAnimId) cancelAnimationFrame(currentAnimId);
+            const startTime = performance.now();
+            
+            function animate(now) {
+                const progress = Math.min((now - startTime) / duration, 1);
+                const ease = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
+
+                mesh.quaternion.copy(startQuaternion).slerp(targetQuaternion, ease);
+                mesh.scale.set(startScale + (targetScale - startScale) * ease, 1, 1);
+                mesh.updateMatrixWorld(true);
+                
+                const currentWorldBox = new THREE.Box3().setFromObject(mesh);
+
+                const currentBgW = startBgW + (bgTargetW - startBgW) * ease;
+                const currentBgH = startBgH + (bgTargetH - startBgH) * ease;
+                const currentCubeW = startCubeW + (cubeTargetW - startCubeW) * ease;
+                const currentCubeH = startCubeH + (cubeTargetH - startCubeH) * ease;
+
+                // ==========================================
+                // 🌟 DOM 背景动画：直接驱动 width 和 height
+                // ==========================================
+                // 底座始终比图片大 BG_PADDING
+                bgBaseEl.style.width = `${currentBgW + BG_PADDING}px`;
+                bgBaseEl.style.height = `${currentBgH + BG_PADDING}px`;
+                
+                // 图片框尺寸跟随 currentBgW/H，利用 object-fit: cover 自动裁切
+                bgImageEl.style.width = `${currentBgW}px`;
+                bgImageEl.style.height = `${currentBgH}px`;
+
+                const currentTargetZoom = calculateTargetZoom(currentWorldBox, currentCubeW, currentCubeH);
+                camera.zoom = currentTargetZoom;
+                camera.updateProjectionMatrix();
+
+                boxHelper.box.setFromObject(mesh);
+                rebuildStrips();
+                renderer.render(scene, camera);
+
+                if (progress < 1) currentAnimId = requestAnimationFrame(animate);
+            }
+            currentAnimId = requestAnimationFrame(animate);
+        }
+
+        function randomExclude(min, max, absMin, absMax) {
+            const sign = Math.random() > 0.3 ? 1 : -1;
+            const val = (Math.random() * (absMax - absMin)) + absMin;
+            return val * sign;
+        }
+
+        function startAutoLoop() {
+            setInterval(() => {
+                currentIdx = (currentIdx + 1) % sequence.length; 
+                const config = sequence[currentIdx];             
+
+                const [w, h] = config.ratio.split(':').map(Number);
+                const isPortraitOrSquare = (w <= h);
+
+                if (currentMode === 'smooth') {
+                    yaw = randomExclude(10, 30, 10, 30);
+                    pitch = randomExclude(10, 30, 10, 30);
+                    if (isPortraitOrSquare && yaw > 0) {
+                        pitch = -Math.abs(pitch);
+                    } else if (!isPortraitOrSquare && yaw > 0) {
+                        pitch = Math.abs(pitch);
+                    }
+                    AABBParams.yaw = yaw;
+                    AABBParams.pitch = pitch;
+                } else {
+                    yaw = randomExclude(10, 20, 10, 20);
+                    if (isPortraitOrSquare && yaw > 0) {
+                        pitch = -15;
+                    } else if (!isPortraitOrSquare && yaw > 0) {
+                        pitch = 15;
+                    }
+                    AABBParams.yaw = yaw;
+                    AABBParams.pitch = pitch;
+                }
+                applyAndSolve();
+            }, interval);
+        }
+
+        function calculateTargetZoom(worldBox, w, h) {
+            const size = new THREE.Vector3();
+            worldBox.getSize(size);
+            const aspect = window.innerWidth / window.innerHeight;
+            const frustumW = frustumHeight * aspect;
+
+            const zoomW = (w / window.innerWidth) * frustumW / size.x;
+            const zoomH = (h / window.innerHeight) * frustumHeight / size.y;
+            return Math.min(zoomW, zoomH) * 1;
+        }
+
+        function rebuildStrips() {
+            if (!geo || !mesh) return;
+            if (!kGroup) { kGroup = new THREE.Group(); scene.add(kGroup); }
+
+            while (kGroup.children.length > 0) {
+                const m = kGroup.children[0];
+                if (m.geometry) m.geometry.dispose();
+                kGroup.remove(m);
+            }
+
+            mesh.updateMatrixWorld(true);
+            const baseZoom = 1.0;
+            const absoluteStroke = boxParams.kStroke * (baseZoom / camera.zoom);
+
+            const qWorld = new THREE.Quaternion();
+            mesh.getWorldQuaternion(qWorld);
+
+            const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+
+            const s1 = makeStrip(worldVertex(geo, 5, mesh), worldVertex(geo, 7, mesh), axisX, matWhiteDS);
+            const s2 = makeStrip(worldVertex(geo, 1, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
+            const s3 = makeCenteredStrip(worldVertex(geo, 2, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5).lerp(worldVertex(geo, 1, mesh), 0.2), axisY, matWhiteDS);
+
+            kGroup.add(s1, s2, s3);
+        }
+
+        function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
+        function makeQuad(p0, p1, p2, p3, mat) {
+            const g = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]);
+            g.setIndex([0, 1, 2, 0, 2, 3]);
+            return new THREE.Mesh(g, mat);
+        }
+        function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
+        function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
+        function deg2rad(d) { return d * Math.PI / 180; }
+        function getAbsR01(o) {
+            const m = new THREE.Matrix4().makeRotationFromQuaternion(o.getWorldQuaternion(new THREE.Quaternion())).elements;
+            return { a00: Math.abs(m[0]), a01: Math.abs(m[4]), a02: Math.abs(m[8]), a10: Math.abs(m[1]), a11: Math.abs(m[5]), a12: Math.abs(m[9]) };
+        }
+        function solveHxForWH(t, R) { return { hx: (t * (R.a11 + R.a12) - (R.a01 + R.a02)) / (R.a00 - t * R.a10), denom: (R.a00 - t * R.a10) }; }
+        
+        function onWindowResize() {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -frustumHeight * aspect / 2;
+            camera.right = frustumHeight * aspect / 2;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.render(scene, camera);
+        }
+
+    </script>
+</body>
+
+</html>

@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Logo Composer — 精简版</title>
+    <title>Logo Composer — 宝宝监修版本</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&display=swap" rel="stylesheet">
@@ -47,11 +47,29 @@
             height: 100%;
             /* CSS 高度 */
         }
+
+        #renderCanvas {
+            filter: drop-shadow(10px 20px 30px rgba(0, 0, 0, 0.4));
+        }
     </style>
 </head>
 
 <body>
     <div id="container" style="position: relative; width: 100vw; height: 100vh;">
+        <button id="recordBtn" style="
+    position: absolute; 
+    bottom: 20px; 
+    right: 20px; 
+    z-index: 10; 
+    padding: 10px 20px; 
+    font-family: 'Fragment Mono', monospace; 
+    background: #ff4757; 
+    color: white; 
+    border: none; 
+    border-radius: 5px; 
+    cursor: pointer;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+">🔴 开始录制</button>
         <canvas id="bgCanvas" style="position: absolute; top: 0; left: 0; z-index: 1;"></canvas>
         <canvas id="rendererCanvas" style="position: absolute; top: 0; left: 0; z-index: 2;"></canvas>
     </div>
@@ -69,77 +87,72 @@
 
         import * as THREE from 'three';
 
+        let scheduleRecording = false; // 标记是否正在等待循环起点
+        let isRecordingLoop = false;   // 标记是否正在录制完美循环
+        let firstYaw = 0, firstPitch = 0; // 记录起点角度，用于在终点时强制闭环
+
+
         // ==========================================
         // 核心控制参数
         // ==========================================
         const AABBParams = {
             targetRatio: "1:1",
             pitch: 15,
-            yaw: -15,
+            yaw: 20,
             targetW: 600,
             targetH: 600
         };
 
-        const sequence = [
-            {
-                "ratio": "3:2",
-                "w": 400,
-                "h": 267.0,
-                "name": "KJM_Haul_q16GQEo.max-800x800.jpg"
-            },
-            {
-                "ratio": "55:68",
-                "w": 400,
-                "h": 494.59,
-                "name": "MARKE0070.max-800x800.jpg"
-            },
-            {
-                "ratio": "43:53",
-                "w": 400,
-                "h": 493.07,
-                "name": "MARKE0101_V1.max-800x800.jpg"
-            },
-            {
-                "ratio": "37:29",
-                "w": 400,
-                "h": 313.5,
-                "name": "MARKE0127.max-800x800.jpg"
-            },
-            {
-                "ratio": "1:1",
-                "w": 400,
-                "h": 400.0,
-                "name": "MARKE0141.max-800x800.jpg"
-            },
-            {
-                "ratio": "5:6",
-                "w": 400,
-                "h": 479.76,
-                "name": "MARKE0165.max-800x800.jpg"
-            },
-            {
-                "ratio": "31:21",
-                "w": 400,
-                "h": 271.0,
-                "name": "MARKE0178.max-800x800.jpg"
-            },
-            {
-                "ratio": "26:31",
-                "w": 400,
-                "h": 476.9,
-                "name": "MARKE0302.max-800x800.jpg"
-            },
-            {
-                "ratio": "101:63",
-                "w": 400,
-                "h": 249.5,
-                "name": "MARKE0313.max-800x800.jpg"
-            }
-        ];
-        let currentIdx = 0;
+const sequence = [
+    {
+        "ratio": "73:48",
+        "w": 400,
+        "h": 263.0,
+        "name": "Fischli_Chamer_Raum_1991.max-800x800.jpg"
+    },
+    {
+        "ratio": "100:77",
+        "w": 400,
+        "h": 308.0,
+        "name": "Slider_small_Anker_Albert.max-800x800.webp"
+    },
+    {
+        "ratio": "63:85",
+        "w": 400,
+        "h": 539.63,
+        "name": "Slider_small_Boecklin_Arnold.max-800x800.webp"
+    },
+    {
+        "ratio": "100:51",
+        "w": 400,
+        "h": 204.0,
+        "name": "Slider_small_Hodler_Ferdinand.max-800x800.webp"
+    },
+    {
+        "ratio": "43:54",
+        "w": 400,
+        "h": 502.35,
+        "name": "Slider_small_Fuessli_Johann_Heinrich.max-800x800.webp"       
+    },
+    {
+        "ratio": "5:3",
+        "w": 400,
+        "h": 240.0,
+        "name": "Slider_small_Segantini_Giovanni.max-800x800.webp"
+    },
+    {
+        "ratio": "39:50",
+        "w": 400,
+        "h": 512.82,
+        "name": "Slider_small_Wueest_Johann-Heinrich.max-800x800.webp"        
+    }
+];
 
+        
+        let currentIdx = 0;
+        let prevIdx = 0; // 新增：记录上一张图片的索引
         const loadedImages = {};
-        const imageFolderPath = './assets/images/KerryJamesMarshall/'; // 你的图片相对路径
+        const imageFolderPath = '../assets/images/Swiss/'; // 你的图片相对路径
         sequence.forEach(item => {
             const img = new Image();
             img.src = imageFolderPath + item.name;
@@ -174,11 +187,11 @@
         const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
 
         const animationModes = {
-            smooth: { duration: 1000, interval: "4000" },
+            smooth: { duration: 1000, interval: "2000" },
             snappy: { duration: 500, interval: "500" }
         }; 0
 
-        let currentMode = 'snappy'; // 默认模式
+        let currentMode = 'smooth'; // 默认模式
         const mode = animationModes[currentMode];
         let yaw, pitch;
 
@@ -196,11 +209,12 @@
             renderer = new THREE.WebGLRenderer({
                 canvas: canvasElement, // 关键：指定画布
                 antialias: true,       // 抗锯齿
-                alpha: true            // 如果你需要背景 Canvas 透出来，这个一定要设为 true
+                alpha: true,            // 如果你需要背景 Canvas 透出来，这个一定要设为 true
+                preserveDrawingBuffer: true
             });
 
             // renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setPixelRatio(window.devicePixelRatio * 4);
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
@@ -305,7 +319,13 @@
             function animate(now) {
                 const progress = Math.min((now - startTime) / duration, 1);
                 // 起步极快，尾速极慢，极其丝滑
-                const ease = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
+                const ease = progress === 0
+                    ? 0
+                    : progress === 1
+                        ? 1
+                        : progress < 0.5
+                            ? Math.pow(2, 20 * progress - 10) / 2
+                            : (2 - Math.pow(2, -20 * progress + 10)) / 2;
 
                 mesh.quaternion.copy(startQuaternion).slerp(targetQuaternion, ease);
                 mesh.scale.set(startScale + (targetScale - startScale) * ease, 1, 1);
@@ -348,50 +368,76 @@
             return val * sign;
         }
 
-        // 自动循环：改为随机生成参数并触发
-        function startAutoLoop() {
-            setInterval(() => {
-                // 切换索引
-                currentIdx = (currentIdx + 1) % sequence.length; // 1. 先更新索引
-                const config = sequence[currentIdx];             // 2. 再获取这个新索引下的配置
 
-                // 2. 加入业务逻辑 Filter
-                // 获取比例字符串，例如 "9:16"
+        function startAutoLoop() {
+            // 确保 interval 和 duration 是纯数字，避免字符串带来的定时器 Bug
+            const numInterval = Number(interval);
+            const numDuration = Number(duration);
+
+            setInterval(() => {
+                prevIdx = currentIdx;
+                currentIdx = (currentIdx + 1) % sequence.length;
+                const config = sequence[currentIdx];
+
                 const [w, h] = config.ratio.split(':').map(Number);
                 const isPortraitOrSquare = (w <= h);
-                console.log(`解析比例: ${w}:${h}, 判定结果: ${w <= h ? '竖屏/方屏' : '横屏'}`);
 
-                if (currentMode === 'smooth') {
-
-                    yaw = randomExclude(10, 30, 10, 30);
-                    pitch = randomExclude(10, 30, 10, 30);
-                    if (isPortraitOrSquare && yaw > 0) {
-                        // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
-                        pitch = -Math.abs(pitch);
-                    } else if (!isPortraitOrSquare && yaw > 0) {
-                        // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
-                        pitch = Math.abs(pitch);
-                    }
-                    // 3. 赋值给参数
-                    AABBParams.yaw = yaw;
-                    AABBParams.pitch = pitch;
+                if (currentIdx === 0) {
+                    yaw = 15;
+                    pitch = 20;
                 } else {
-
-                    yaw = randomExclude(10, 20, 10, 20);
-                    if (isPortraitOrSquare && yaw > 0) {
-                        // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
-                        pitch = -15;
-                    } else if (!isPortraitOrSquare && yaw > 0) {
-                        // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
-                        pitch = 15;
-
+                    // --- 角度计算保持不变 ---
+                    if (currentMode === 'smooth') {
+                        yaw = randomExclude(10, 20, 10, 20);
+                        pitch = randomExclude(10, 20, 10, 20);
+                        if (isPortraitOrSquare && yaw > 0) pitch = -Math.abs(pitch);
+                        else if (!isPortraitOrSquare && yaw > 0) pitch = Math.abs(pitch);
+                    } else {
+                        yaw = randomExclude(10, 20, 10, 20);
+                        if (isPortraitOrSquare && yaw > 0) pitch = -15;
+                        else if (!isPortraitOrSquare && yaw > 0) pitch = 15;
                     }
-                    // 非平滑模式直接使用预设的角度
-                    AABBParams.yaw = yaw;
-                    AABBParams.pitch = pitch;
                 }
+
+                // // ==========================================
+                // // 🔄 完美循环拦截器
+                // // ==========================================
+
+                // // 1. 如果马上要录完一整圈回到起点了，强行覆盖刚才生成的随机角度！
+                // if (isRecordingLoop && currentIdx === 0) {
+                //     yaw = firstYaw;
+                //     pitch = firstPitch;
+                // }
+
+                AABBParams.yaw = yaw;
+                AABBParams.pitch = pitch;
                 applyAndSolve();
-            }, interval);
+
+                // 2. 录制排期逻辑
+                if (scheduleRecording && currentIdx === 0) {
+                    scheduleRecording = false;
+                    // 记住第一张图的随机角度
+                    firstYaw = yaw;
+                    firstPitch = pitch;
+
+                    // ⚠️ 关键：不要立刻开始录！
+                    // 此时 0 号图片刚刚开始从上一张图翻转过来。
+                    // 我们等待 duration (比如 1000ms)，等它稳稳停住的瞬间，作为视频的第 1 帧！
+                    setTimeout(() => {
+                        startRecording();
+                        isRecordingLoop = true;
+                    }, numDuration);
+                }
+                else if (isRecordingLoop && currentIdx === 0) {
+                    // 此时最后一帧正在努力翻转回第一帧的状态。
+                    // 等待它完全停住的瞬间，立刻咔嚓停掉录影，形成完美闭环！
+                    setTimeout(() => {
+                        stopRecording();
+                        isRecordingLoop = false;
+                    }, numDuration);
+                }
+
+            }, numInterval);
         }
 
         // 改为接收动态尺寸参数
@@ -501,7 +547,7 @@
             // 1. 绘制灰色底座 (自带阴影)
             // ==========================================
             ctx.save();
-            ctx.translate(centerX, centerY); // 🎯 原点移到中心
+            ctx.translate(centerX, centerY);
             ctx.fillStyle = '#ebebeb';
             ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
             ctx.shadowBlur = 3;
@@ -510,51 +556,46 @@
             const rectW = 400 + padding * 2;
             const rectH = 600 + padding * 2;
             ctx.fillRect(-rectW / 2, -rectH / 2, rectW, rectH);
-            ctx.restore(); // 🛑 原点弹回左上角 (0,0)，并且清空阴影设置
+            ctx.restore();
 
             // ==========================================
-            // 2. 绘制博物馆照片
+            // 2. 绘制博物馆照片 (带透明度淡入淡出)
             // ==========================================
-            // const currentImgName = sequence[currentIdx].name;
-            // const currentImg = loadedImages[currentImgName];
-
-            // ctx.save(); // 🛡️ 重新开启一个新的干净状态
-            // ctx.translate(centerX, centerY); // 🎯 再次把原点移到中心！
-
-            // if (currentImg && currentImg.complete) {
-            //     // 现在 -w/2, -h/2 是相对于屏幕中心点的，完美居中！
-            //     ctx.drawImage(currentImg, -w / 2, -h / 2, w, h);
-            // } else {
-            //     ctx.fillStyle = '#ebebeb';
-            //     ctx.fillRect(-w / 2, -h / 2, w, h);
-            // }
-
-            // ctx.restore(); // 🛑 画完照片，再次把原点弹回左上角
-
             const currentItem = sequence[currentIdx];
-            const currentImgName = currentItem.name;
-            const currentImg = loadedImages[currentImgName];
+            const prevItem = sequence[prevIdx];
 
-            // 🎯 核心修改：直接拿 Python 算好的最终尺寸，不使用动画插值
-            const fixedW = currentItem.w;
-            const fixedH = currentItem.h;
+            const currentImg = loadedImages[currentItem.name];
+            const prevImg = loadedImages[prevItem.name];
 
             ctx.save();
-            ctx.translate(centerX, centerY);
+            ctx.translate(centerX, centerY); // 将原点移到中心
 
-            if (currentImg && currentImg.complete) {
-                // 使用写死的固定尺寸，始终保持完美的原始比例
-                ctx.drawImage(currentImg, -fixedW / 2, -fixedH / 2, fixedW, fixedH);
-            } else {
-                ctx.fillStyle = '#ebebeb';
-                ctx.fillRect(-fixedW / 2, -fixedH / 2, fixedW, fixedH);
+            // 如果处于动画过渡中，且发生了图片切换，则绘制旧图（淡出）
+            if (progress < 1 && prevIdx !== currentIdx) {
+                ctx.globalAlpha = 1 - ease; // 随着动画进行，透明度从 1 降到 0
+                if (prevImg && prevImg.complete) {
+                    ctx.drawImage(prevImg, -prevItem.w / 2, -prevItem.h / 2, prevItem.w, prevItem.h);
+                } else {
+                    ctx.fillStyle = '#ebebeb';
+                    ctx.fillRect(-prevItem.w / 2, -prevItem.h / 2, prevItem.w, prevItem.h);
+                }
             }
 
-            ctx.restore();
+            // 绘制新图（淡入）
+            // 如果在动画中，透明度跟着 ease 走；如果动画结束，恢复 1.0 (完全不透明)
+            ctx.globalAlpha = (progress < 1 && prevIdx !== currentIdx) ? ease : 1;
+            if (currentImg && currentImg.complete) {
+                ctx.drawImage(currentImg, -currentItem.w / 2, -currentItem.h / 2, currentItem.w, currentItem.h);
+            } else {
+                ctx.fillStyle = '#ebebeb';
+                ctx.fillRect(-currentItem.w / 2, -currentItem.h / 2, currentItem.w, currentItem.h);
+            }
+
+            ctx.restore(); // 恢复 context 状态，清除 globalAlpha 的影响
         }
 
         function resizeCanvases() {
-            const dpr = window.devicePixelRatio || 1; // 获取缩放比，通常是 2 或 3
+            const dpr = window.devicePixelRatio || 2; // 获取缩放比，通常是 2 或 3
             const width = window.innerWidth;
             const height = window.innerHeight;
 
@@ -577,6 +618,127 @@
         resizeCanvases();
         window.addEventListener('resize', resizeCanvases);
 
+        // ==========================================
+        // 🔴 录像机模块 (MediaRecorder)
+        // ==========================================
+        let isRecording = false;
+        let mediaRecorder;
+        let recordedChunks = [];
+        let recordLoopId;
+
+        // 1. 创建隐藏的合成画布
+        const compositeCanvas = document.createElement('canvas');
+        const compCtx = compositeCanvas.getContext('2d');
+
+        const recordBtn = document.getElementById('recordBtn');
+
+        recordBtn.addEventListener('click', () => {
+            if (!isRecording && !scheduleRecording && !isRecordingLoop) {
+                scheduleRecording = true;
+                recordBtn.innerText = '⏳ 等待循环起点...';
+                recordBtn.style.background = '#f39c12'; // 变成橙色表示等待中
+            } else {
+                // 允许中途手动强行取消
+                scheduleRecording = false;
+                isRecordingLoop = false;
+                stopRecording();
+            }
+        });
+        function startRecording() {
+            isRecording = true;
+            recordedChunks = [];
+            recordBtn.innerText = '⏹ 停止录制';
+            recordBtn.style.background = '#2ed573';
+
+            const dpr = window.devicePixelRatio || 1;
+            compositeCanvas.width = window.innerWidth * dpr;
+            compositeCanvas.height = window.innerHeight * dpr;
+
+            const stream = compositeCanvas.captureStream(60);
+
+            // 🌟 核心修改 1：强制指定为 MP4 和 H.264 编码
+            const options = {
+                mimeType: 'video/mp4; codecs="avc1.42E01E"',
+                videoBitsPerSecond: 100000000 // 25 Mbps，享受极其清晰的画质
+            };
+
+            try {
+                mediaRecorder = new MediaRecorder(stream, options);
+            } catch (e) {
+                try {
+                    // 退一步的 fallback 里，也要记得加上高码率！
+                    mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'video/mp4',
+                        videoBitsPerSecond: 25000000
+                    });
+                } catch (err) {
+                    alert("你当前的浏览器不支持原生录制 MP4 格式，请使用最新版的 Chrome、Edge 或 Safari。");
+                    isRecording = false;
+                    recordBtn.innerText = '🔴 开始录制';
+                    recordBtn.style.background = '#ff4757';
+                    return;
+                }
+            }
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = exportVideo;
+            mediaRecorder.start();
+
+            compositeLoop();
+        }
+        function stopRecording() {
+            isRecording = false;
+            recordBtn.innerText = '🔴 开始录制';
+            recordBtn.style.background = '#ff4757';
+
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            if (recordLoopId) {
+                cancelAnimationFrame(recordLoopId);
+            }
+        }
+
+        // 5. 将两个画布拼合到一起的循环
+        function compositeLoop() {
+            if (!isRecording) return;
+
+            // 清空画布
+            compCtx.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+
+            // 先画背景 (底图)
+            compCtx.drawImage(bgCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
+
+            // 再画前景 (3D 盒子)，因为 rendererCanvas 有 alpha: true，所以会完美叠加上去
+            compCtx.drawImage(rendererCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
+
+            // 持续循环
+            recordLoopId = requestAnimationFrame(compositeLoop);
+        }
+
+        function exportVideo() {
+            // 🌟 核心修改 2：把打包的 Blob 类型改成 MP4
+            const blob = new Blob(recordedChunks, { type: 'video/mp4' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            // 🌟 核心修改 3：文件后缀名改为 .mp4
+            a.download = `Logo_Composer_${new Date().getTime()}.mp4`;
+            document.body.appendChild(a);
+            a.click();
+
+            setTimeout(() => {
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            }, 100);
+        }
     </script>
 </body>
 

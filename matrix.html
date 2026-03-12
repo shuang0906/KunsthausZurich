@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Logo Composer — 完美旋转 BoxHelper 版</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #f5f5f5;
+            font-family: monospace, sans-serif;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #rendererCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #rendererCanvas svg {
+            max-width: 90vw;
+            max-height: 90vh;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            background-color: #fff;
+        }
+
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border: 1px solid #ddd;
+        }
+
+        .input-group {
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+        }
+
+        .input-group label {
+            display: inline-block;
+            width: 130px;
+            font-weight: bold;
+        }
+
+        .input-group input[type="text"],
+        .input-group input[type="number"] {
+            width: 70px;
+            padding: 4px;
+            font-family: inherit;
+        }
+
+        .input-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        button {
+            padding: 8px 12px;
+            margin-right: 10px;
+            background: #222;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        button:hover {
+            background: #555;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="ui-panel">
+        <div class="input-group">
+            <label>Ratio (W:H)</label>
+            <input type="text" id="ratioInput" value="400:600">
+        </div>
+        <div class="input-group">
+            <label>Stroke (px)</label>
+            <input type="number" id="strokeInput" value="3" step="1">
+        </div>
+        <div class="input-group">
+            <label>Spacing</label>
+            <input type="number" id="spacingInput" value="3" step="0.1">
+        </div>
+        <div class="input-group">
+            <label>Pitch Range (+/-)</label>
+            <input type="number" id="pitchRangeInput" value="30">
+        </div>
+        <div class="input-group">
+            <label>Yaw Range (+/-)</label>
+            <input type="number" id="yawRangeInput" value="40">
+        </div>
+        <div class="input-group">
+            <label>Show Box</label>
+            <input type="checkbox" id="showBoxInput" checked>
+        </div>
+        <button id="updateBtn">生成/更新</button>
+        <button id="saveBtn">保存 SVG</button>
+    </div>
+
+    <div id="container">
+        <div id="rendererCanvas"></div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.125.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
+
+        let renderer, scene, camera, kGroup, geo;
+        const numCubes = 7;
+        
+        const frustumHeight = 40; 
+        let currentTargetH = 600; 
+
+        const colorParams = {
+            cStroke: '#000000',
+        };
+        const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
+
+        init();
+
+        function init() {
+            const container = document.getElementById('rendererCanvas');
+
+            renderer = new SVGRenderer();
+            container.appendChild(renderer.domElement);
+
+            scene = new THREE.Scene();
+            camera = new THREE.OrthographicCamera(-4, 4, 4, -4, -100, 100);
+
+            // 按照你的要求，更新了几何体尺寸为 4, 1, 2
+            geo = new THREE.BoxGeometry(4, 2, 2);
+
+            document.getElementById('updateBtn').addEventListener('click', updateScene);
+            document.getElementById('saveBtn').addEventListener('click', saveSVG);
+
+            updateScene();
+        }
+
+        function updateScene() {
+            const ratioStr = document.getElementById('ratioInput').value;
+            const pitchRange = parseFloat(document.getElementById('pitchRangeInput').value) || 15;
+            const yawRange = parseFloat(document.getElementById('yawRangeInput').value) || 20;
+            const spacing = parseFloat(document.getElementById('spacingInput').value) || 3;
+            const showBox = document.getElementById('showBoxInput').checked;
+
+            let [rw, rh] = ratioStr.includes(':') ? ratioStr.split(':').map(Number) : [parseFloat(ratioStr), 1];
+            if (!rw || !rh) { rw = 400; rh = 600; } 
+
+            const targetW = rw;
+            const targetH = rh;
+            const aspect = targetW / targetH;
+            currentTargetH = targetH;
+            
+            renderer.setSize(targetW, targetH);
+            
+            camera.left = -frustumHeight * aspect / 2;
+            camera.right = frustumHeight * aspect / 2;
+            camera.top = frustumHeight / 2;
+            camera.bottom = -frustumHeight / 2;
+            camera.updateProjectionMatrix();
+
+            if (kGroup) {
+                while (kGroup.children.length > 0) {
+                    const obj = kGroup.children[0];
+                    if (obj.isMesh || obj.isGroup) {
+                        // 递归清理几何体和材质防止内存泄漏
+                        obj.traverse(child => {
+                            if (child.geometry) child.geometry.dispose();
+                        });
+                    }
+                    kGroup.remove(obj);
+                }
+                scene.remove(kGroup);
+            }
+            kGroup = new THREE.Group();
+            scene.add(kGroup);
+
+            const strokePx = parseFloat(document.getElementById('strokeInput').value) || 3;
+            const absoluteStroke = (strokePx * frustumHeight) / (currentTargetH * 1.0); 
+
+            for (let i = 0; i < numCubes; i++) {
+                // 1. 在原点创建一个未旋转的 Mesh
+                const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+                const mesh = new THREE.Mesh(geo, mat);
+                
+                // 2. 按照你的做法：在 Mesh 旋转前生成 BoxHelper，并作为子对象添加
+                if (showBox) {
+                    const box = new THREE.BoxHelper(mesh, '#00ff00');
+                    box.matrixAutoUpdate = true; // 强制更新矩阵，使其继承父级变换
+                    mesh.add(box);
+                }
+
+                // 3. 计算并应用当前立方体的位移与旋转
+                const yPos = (numCubes / 2 - i) * spacing;
+                const pitch = pitchRange - (i * (2 * pitchRange) / (numCubes - 1));
+                const yaw = yawRange - (i * (2 * yawRange) / (numCubes - 1));
+
+                mesh.position.set(0, yPos, 0);
+                mesh.rotation.set(deg2rad(pitch), deg2rad(yaw), 0, 'XYZ');
+                mesh.updateMatrixWorld(true);
+
+                // 4. 将带有 BoxHelper 的 Mesh 添加进全局组
+                kGroup.add(mesh);
+
+                // 5. 添加黑色的 Strip 笔触（它们使用世界坐标系构建，直接加到 kGroup 里）
+                addStripsToGroup(mesh, kGroup, absoluteStroke);
+            }
+
+            // 计算所有物体的边界以自适应相机缩放
+            const allStripsBox = new THREE.Box3().setFromObject(kGroup);
+            const size = new THREE.Vector3();
+            allStripsBox.getSize(size);
+            const frustumW = frustumHeight * aspect;
+            const zoomW = frustumW / size.x;
+            const zoomH = frustumHeight / size.y;
+            camera.zoom = Math.min(zoomW, zoomH) * 0.9;
+            camera.updateProjectionMatrix();
+
+            renderer.render(scene, camera);
+        }
+
+        function addStripsToGroup(mesh, containerGroup, absoluteStroke) {
+            const qWorld = new THREE.Quaternion();
+            mesh.getWorldQuaternion(qWorld);
+            const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+
+            const s1 = makeStrip(worldVertex(geo, 5, mesh), worldVertex(geo, 7, mesh), axisX, matWhiteDS);
+            const s2 = makeStrip(worldVertex(geo, 1, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
+            const s3 = makeCenteredStrip(worldVertex(geo, 2, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5).lerp(worldVertex(geo, 1, mesh), 0.2), axisY, matWhiteDS);
+
+            containerGroup.add(s1, s2, s3);
+        }
+
+        function saveSVG() {
+            const svgElement = renderer.domElement;
+            const serializer = new XMLSerializer();
+            let svgString = serializer.serializeToString(svgElement);
+
+            if (!svgString.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
+                svgString = svgString.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+
+            const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            
+            let ratioStr = document.getElementById('ratioInput').value;
+            let safeRatioName = ratioStr.replace(/:/g, 'x');
+            const strokePx = document.getElementById('strokeInput').value;
+            
+            link.download = `logo-transition-${safeRatioName}-${strokePx}px.svg`;
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }
+
+        function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
+        function makeQuad(p0, p1, p2, p3, mat) {
+            const g = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]);
+            g.setIndex([0, 1, 2, 0, 2, 3]);
+            return new THREE.Mesh(g, mat);
+        }
+        function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
+        function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
+        function deg2rad(d) { return d * Math.PI / 180; }
+        
+    </script>
+</body>
+
+</html>

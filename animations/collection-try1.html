@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Autonomous Art Gallery</title>
+    <link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&display=swap" rel="stylesheet">
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 背景画框层 */
+        #bgLayer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; justify-content: center; align-items: center;
+            z-index: 1;
+        }
+
+        #bgBase {
+            position: absolute;
+            background-color: #ffffff;
+            box-shadow: 5px 5px 20px rgba(0, 0, 0, 0.2);
+            display: flex; justify-content: center; align-items: center;
+            /* 取消长宽的过渡动画，让它每一帧紧紧跟随 Cube */
+        }
+
+        #bgImage {
+            position: absolute;
+            object-fit: cover;
+            opacity: 1; 
+        }
+
+        /* 3D 渲染层 */
+        #rendererCanvas {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 2;
+            pointer-events: none;
+            filter: drop-shadow(10px 20px 30px rgba(0, 0, 0, 0.4));
+        }
+
+        #info {
+            position: absolute; z-index: 10; font-family: 'Fragment Mono', monospace; font-size: 14px;
+            color: #333; background: rgba(255, 255, 255, 0.8); padding: 10px 20px; border-radius: 20px;
+            top: 20px; left: 20px; pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <div id="info">Initializing Museum... ⏳</div>
+        <div id="bgLayer">
+            <div id="bgBase">
+                <img id="bgImage" src="" alt="Museum Art" onload="this.style.opacity=1">
+            </div>
+        </div>
+        <canvas id="rendererCanvas"></canvas>
+    </div>
+
+    <script src="/assets/museumDB.js"></script>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // ==========================================
+        // ⚙️ 全局配置与数据
+        // ==========================================
+        const sequence = window.museumDB || [];
+        const imageFolderPath = '/assets/museum_frames/';
+        const loadedImages = {};
+
+        // 预加载所有图片到内存
+        sequence.forEach(item => {
+            const img = new Image();
+            img.src = imageFolderPath + item.name;
+            loadedImages[item.name] = img;
+        });
+
+        // UI与DOM
+        const infoEl = document.getElementById('info');
+        const bgBaseEl = document.getElementById('bgBase');
+        const bgImageEl = document.getElementById('bgImage');
+        const BG_PADDING = 40; // 白边的厚度
+
+        // Three.js 变量
+        const frustumHeight = 8;
+        const boxParams = { kStroke: 0.15 };
+        let renderer, scene, camera, mesh, boxHelper, kGroup;
+        let geo;
+        
+        let currentBoundingBox = { w: 0, h: 0, ratio: 1 };
+        
+        // 动画参数配置
+        const UPDATE_INTERVAL_MS = 200; // 每 500ms 换一张图 (你可以改成 200 试试极其鬼畜的效果)
+        let lastImageName = "";
+
+        if (sequence.length === 0) {
+            infoEl.innerText = "⚠️ 找不到数据库，检查路径！";
+        } else {
+            init();
+            animate();
+            startMatchingTimer(UPDATE_INTERVAL_MS);
+        }
+
+        // ==========================================
+        // 🛠️ 初始化
+        // ==========================================
+        function init() {
+            const canvasElement = document.getElementById('rendererCanvas');
+            renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            scene = new THREE.Scene();
+            
+            const aspect = window.innerWidth / window.innerHeight;
+            camera = new THREE.OrthographicCamera(
+                -frustumHeight * aspect / 2, frustumHeight * aspect / 2,
+                frustumHeight / 2, -frustumHeight / 2, -100, 100
+            );
+            camera.zoom = 1.0; 
+            camera.updateProjectionMatrix();
+
+            // 生成基础 Cube (这次去掉了碍眼的绿框)
+            geo = new THREE.BoxGeometry(2, 2, 2);
+            const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+            mesh = new THREE.Mesh(geo, mat);
+            scene.add(mesh);
+           let box = new THREE.BoxHelper(mesh, 0xFFFFFF);
+            mesh.add(box);
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // ==========================================
+        // 🏃‍♂️ 核心：自驱动动画与 DOM 实时同步
+        // ==========================================
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const t = performance.now() * 0.001; 
+
+            // 1. 赋予生命：长宽的平滑变化，以及旋转
+// 基础频率：确保 16 秒完成一个完美大循环
+            const w = (Math.PI * 2) / 16;
+
+            // 1. 赋予生命：长宽的平滑变化，以及旋转
+            // scale.x 基础值设为 2.5，波动幅度 1.5 (最扁为 1，最宽为 4)
+            mesh.scale.x = 3 + Math.sin(t * w * 4) * 4; // 速度是基础的 3 倍 (约 5.3秒一轮)
+            mesh.scale.y = 2.0 + Math.cos(t * w * 2) * 1.0; // 速度是基础的 2 倍 (8秒一轮)
+            
+            // 旋转
+            mesh.rotation.y = Math.sin(t * w * 1) * 0.8;    // 速度是基础的 1 倍 (正好 16秒一轮)
+            mesh.rotation.x = Math.sin(t * w * 2) * 0.5;    // 速度是基础的 2 倍 (8秒一轮，用 sin 和 scale.y 的 cos 错开相位)
+
+            // 2. 实时计算 2D 投影包围盒
+            const currentWorldBox = new THREE.Box3().setFromObject(mesh);
+            const size = new THREE.Vector3();
+            currentWorldBox.getSize(size);
+            
+            currentBoundingBox.w = size.x;
+            currentBoundingBox.h = size.y;
+            currentBoundingBox.ratio = size.x / size.y;
+
+            // 3. 🎯 绝技：将 3D 世界坐标完美换算为屏幕像素，死死咬住 DOM 画框
+            const frustumH_zoomed = frustumHeight / camera.zoom;
+            const aspect = window.innerWidth / window.innerHeight;
+            const frustumW_zoomed = frustumH_zoomed * aspect;
+
+            const pixelW = (currentBoundingBox.w / frustumW_zoomed) * window.innerWidth;
+            const pixelH = (currentBoundingBox.h / frustumH_zoomed) * window.innerHeight;
+
+            bgBaseEl.style.width = `${pixelW + BG_PADDING}px`;
+            bgBaseEl.style.height = `${pixelH + BG_PADDING}px`;
+            bgImageEl.style.width = `${pixelW + BG_PADDING}px`;
+            bgImageEl.style.height = `${pixelH + BG_PADDING}px`;
+
+            // 4. 更新视觉元素
+            rebuildStrips();
+            renderer.render(scene, camera);
+        }
+
+        // ==========================================
+        // ⏱️ 智能匹配：寻找数据库中最相似的画作
+        // ==========================================
+        function startMatchingTimer(interval_ms) {
+            setInterval(() => {
+                const targetRatio = currentBoundingBox.ratio;
+                let closestArt = sequence[0];
+                let minDiff = Math.abs(closestArt.ratioVal - targetRatio);
+
+                // 遍历寻找比例最接近的画
+                for (let i = 1; i < sequence.length; i++) {
+                    const diff = Math.abs(sequence[i].ratioVal - targetRatio);
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        closestArt = sequence[i];
+                    }
+                }
+
+                // 更新UI与图片 (避免重复刷新同一张图)
+                if (closestArt.name !== lastImageName) {
+                    setTimeout(() => {
+                        bgImageEl.src = loadedImages[closestArt.name] ? loadedImages[closestArt.name].src : (imageFolderPath + closestArt.name);
+                    }, 50);
+                    lastImageName = closestArt.name;
+                    
+                    // infoEl.innerText = `Matched Art: ${closestArt.name}\nTarget Ratio: ${targetRatio.toFixed(3)}\nArt Ratio: ${closestArt.ratioVal.toFixed(3)}`;
+                    infoEl.innerText = `${closestArt.title}`;
+
+                }
+
+            }, interval_ms);
+        }
+
+        // ==========================================
+        // 辅助绘图逻辑 (Strips)
+        // ==========================================
+        function rebuildStrips() {
+            if (!kGroup) { kGroup = new THREE.Group(); scene.add(kGroup); }
+            while (kGroup.children.length > 0) {
+                const m = kGroup.children[0];
+                if (m.geometry) m.geometry.dispose();
+                kGroup.remove(m);
+            }
+            const matWhiteDS = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+            const absoluteStroke = boxParams.kStroke;
+            const qWorld = new THREE.Quaternion();
+            mesh.getWorldQuaternion(qWorld);
+            const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            const s1 = makeStrip(worldVertex(geo, 5, mesh), worldVertex(geo, 7, mesh), axisX, matWhiteDS);
+            const s2 = makeStrip(worldVertex(geo, 1, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
+            const s3 = makeCenteredStrip(worldVertex(geo, 2, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5).lerp(worldVertex(geo, 1, mesh), 0.2), axisY, matWhiteDS);
+            kGroup.add(s1, s2, s3);
+        }
+
+        function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
+        function makeQuad(p0, p1, p2, p3, mat) {
+            const g = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]); g.setIndex([0, 1, 2, 0, 2, 3]); return new THREE.Mesh(g, mat);
+        }
+        function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
+        function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
+        
+        function onWindowResize() {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -frustumHeight * aspect / 2; camera.right = frustumHeight * aspect / 2;
+            camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+</html>

@@ -9,7 +9,7 @@ from fractions import Fraction
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 2. 自动把母文件夹路径和你的图片文件夹名字拼在一起
-FOLDER_PATH = os.path.join(BASE_DIR, "KerryJamesMarshall") 
+FOLDER_PATH = os.path.join(BASE_DIR, "Scheidegger") 
 
 print(f"正在读取的文件夹路径是: {FOLDER_PATH}") # 你可以打印出来看看，非常安心
 

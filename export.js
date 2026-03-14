@@ -78,7 +78,7 @@ export async function startCanvasRecording(renderer, { seconds = 2, fps = 60, fi
     const stopped = new Promise(resolve => (recorder.onstop = resolve));
 
     recorder.start(); // start capturing
-    setTimeout(() => { try { recorder.stop(); } catch (_) { } }, (seconds + 0.15) * 1000);
+    setTimeout(() => { try { recorder.stop(); } catch (_) { } }, (seconds + 0.1) * 1000);
 
     await stopped;
 

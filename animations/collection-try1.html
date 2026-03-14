@@ -56,7 +56,7 @@
         #info {
             position: absolute; z-index: 10; font-family: 'Fragment Mono', monospace; font-size: 14px;
             color: #333; background: rgba(255, 255, 255, 0.8); padding: 10px 20px; border-radius: 20px;
-            top: 20px; left: 20px; pointer-events: none;
+            bottom: 40px; left: 50vw; transform: translateX(-50%); pointer-events: none;
         }
     </style>
 </head>
@@ -91,6 +91,8 @@
         const sequence = window.museumDB || [];
         const imageFolderPath = '/assets/museum_frames/';
         const loadedImages = {};
+
+        
 
         // 预加载所有图片到内存
         sequence.forEach(item => {

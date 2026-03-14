@@ -50,7 +50,7 @@ export function addBoxHelperUI({
     render,
 }) {
     const ui = { showBoxHelper: true }; // default on
-    gui.add(ui, 'showBoxHelper').name('Box Helper').onChange((v) => {
+    gui.add(ui, 'showBoxHelper').name('Box').onChange((v) => {
         if (box) box.visible = v;
         render();
     });
@@ -84,7 +84,7 @@ export function addStaticUI({
 }) {
     const staticFolder = gui.addFolder('Static');
 
-    staticFolder.add(boxParams, 'kStroke', 0.001, 1, 0.001).name('Stroke Width').onChange((val) => {
+    staticFolder.add(boxParams, 'kStroke', 0.1, 1, 0.1).name('Stroke Width').onChange((val) => {
         rebuildStrips();
     });
 
@@ -103,8 +103,8 @@ export function addStaticUI({
 
     [xCtrl, yCtrl, zCtrl].forEach(c => c.step(rotParams.step));
 
-    // staticRotation.add(rotParams, 'step', 0.01, 45, 0.01).name('Step').onChange((s) => {
-    //     [xCtrl, yCtrl, zCtrl].forEach(c => c.step(s));
+    // staticRotation.add(rotParams, 'step', 0.01, 45, 0.01).name('Step').onChange( => {
+    //     [xCtrl, yCtrl, zCtrl].forEach(c => c.step);
     // });
 
     staticFolder.add({
@@ -136,9 +136,10 @@ export function addAnimationUI({
 
     const rotateFolder = animFolder.addFolder('Rotate');
     rotateFolder.add(rotParams, 'enabled').name('Animation');
-    rotateFolder.add(rotParams, 'period', 0.1, 60, 0.01).name('Rotation Cycle (s)');
+    rotateFolder.add(rotParams, 'period', 0.1, 60, 0.01).name('Cycle ');//rotation period
 
     const strokeFolder = animFolder.addFolder('Stroke');
+    strokeFolder.close();
     strokeFolder.add(strokeParams, 'auto').name('Animation').onChange(resetAnimStroke);
     strokeFolder.add(strokeParams, 'min', 0.001, 1, 0.001).name('Stroke Min').onChange(() => {
         if (strokeParams.min > strokeParams.max) [strokeParams.min, strokeParams.max] = [strokeParams.max, strokeParams.min];
@@ -146,33 +147,33 @@ export function addAnimationUI({
     strokeFolder.add(strokeParams, 'max', 0.001, 1, 0.001).name('Stroke Max').onChange(() => {
         if (strokeParams.min > strokeParams.max) [strokeParams.min, strokeParams.max] = [strokeParams.max, strokeParams.min];
     });
-    strokeFolder.add(strokeParams, 'period', 0.1, 10, 0.01).name('Stroke Cycle (s)').onChange(resetAnimStroke);
-    strokeFolder.add(strokeParams, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)').onChange(resetAnimStroke);
-    strokeFolder.add(strokeParams, 'delayStart', 0, 10, 0.01).name('Start Delay (s)').onChange(resetAnimStroke);
+    strokeFolder.add(strokeParams, 'period', 0.1, 10, 0.01).name('Cycle ').onChange(resetAnimStroke);
+    strokeFolder.add(strokeParams, 'delayPause', 0, 10, 0.01).name('Pause').onChange(resetAnimStroke);
+    strokeFolder.add(strokeParams, 'delayStart', 0, 10, 0.01).name('Delay ').onChange(resetAnimStroke);
 
     const widthFolder = animFolder.addFolder('Box Width');
     widthFolder.add(widthParams, 'auto').name('Animation').onChange(resetAnimBoxWidth);
-    widthFolder.add(widthParams, 'min', 1, 6, 0.01).name('Width Min').onChange(() => {
+    widthFolder.add(widthParams, 'min', 1, 10, 0.01).name('Width Min').onChange(() => {
         if (widthParams.min > widthParams.max) [widthParams.min, widthParams.max] = [widthParams.max, widthParams.min];
     });
-    widthFolder.add(widthParams, 'max', 1, 6, 0.01).name('Width Max').onChange(() => {
+    widthFolder.add(widthParams, 'max', 1, 10, 0.01).name('Width Max').onChange(() => {
         if (widthParams.min > widthParams.max) [widthParams.min, widthParams.max] = [widthParams.max, widthParams.min];
     });
-    widthFolder.add(widthParams, 'period', 0.1, 10, 0.01).name('Width Cycle (s)');
-    widthFolder.add(widthParams, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)').onChange(resetAnimBoxWidth);
-    widthFolder.add(widthParams, 'delayStart', 0, 10, 0.01).name('Start Delay (s)').onChange(resetAnimBoxWidth);
+    widthFolder.add(widthParams, 'period', 0.1, 10, 0.01).name('Cycle ');
+    widthFolder.add(widthParams, 'delayPause', 0, 10, 1).name('Pause ').onChange(resetAnimBoxWidth);
+    widthFolder.add(widthParams, 'delayStart', 0, 10, 1).name('Delay ').onChange(resetAnimBoxWidth);
 
     const heightFolder = animFolder.addFolder('Box Height');
     heightFolder.add(heightParams, 'auto').name('Animation').onChange(resetAnimBoxHeight);
-    heightFolder.add(heightParams, 'min', 1, 6, 0.01).name('Height Min').onChange(() => {
+    heightFolder.add(heightParams, 'min', 1, 6, 1).name('Height Min').onChange(() => {
         if (heightParams.min > heightParams.max) [heightParams.min, heightParams.max] = [heightParams.max, heightParams.min];
     });
-    heightFolder.add(heightParams, 'max', 1, 6, 0.01).name('Height Max').onChange(() => {
+    heightFolder.add(heightParams, 'max', 1, 5, 1).name('Height Max').onChange(() => {
         if (heightParams.min > heightParams.max) [heightParams.min, heightParams.max] = [heightParams.max, heightParams.min];
     });
-    heightFolder.add(heightParams, 'period', 0.1, 10, 0.01).name('Height Cycle (s)').onChange(resetAnimBoxHeight);
-    heightFolder.add(heightParams, 'delayPause', 0, 10, 0.01).name('Pause Delay (s)').onChange(resetAnimBoxHeight);
-    heightFolder.add(heightParams, 'delayStart', 0, 10, 0.01).name('Start Delay (s)').onChange(resetAnimBoxHeight);
+    heightFolder.add(heightParams, 'period', 0.1, 10, 0.01).name('Height Cycle ').onChange(resetAnimBoxHeight);
+    heightFolder.add(heightParams, 'delayPause', 0, 10, 1).name('Pause ').onChange(resetAnimBoxHeight);
+    heightFolder.add(heightParams, 'delayStart', 0, 10, 1).name('Delay ').onChange(resetAnimBoxHeight);
 
     animFolder.add(animActions, 'startAnimation').name('Start Animation');
 
@@ -189,14 +190,14 @@ export function addExportUI({
     const exportFolder = gui.addFolder('Export');
 
     const SVGFolder = exportFolder.addFolder('SVG');
-    SVGFolder.add(svgParams, 'filename').name('SVG Filename');
-    SVGFolder.add(svgParams, 'background').name('SVG Background');
+    SVGFolder.add(svgParams, 'filename').name('Filename');
+    SVGFolder.add(svgParams, 'background').name('Background');
     const exportSvgCtrl = SVGFolder.add(svgParams, 'save').name('Save SVG');
 
     const videoFolder = exportFolder.addFolder('Video');
     videoFolder.add(recParams, 'seconds', 0.5, 30, 0.1).name('Record Seconds');
     videoFolder.add(recParams, 'fps', 1, 60, 1).name('Record FPS');
-    videoFolder.add(recParams, 'filename').name('Record Filename');
+    videoFolder.add(recParams, 'filename').name('Filename');
     const exportVideoCtrl = videoFolder.add(recordActions, 'startRecord').name('Start Record');
     const exportVideoAnimCtrl = videoFolder.add(comboActions, 'startAnimRecord').name('Start Animation + Record');
 

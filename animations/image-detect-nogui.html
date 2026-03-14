@@ -4,11 +4,11 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Logo Composer — 精简版</title>
+    <title>Logo Composer — Logo System Demo</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="../style.css">
     <style>
         svg {
             background-color: transparent !important;
@@ -52,6 +52,9 @@
 
 <body>
     <div id="container" style="position: relative; width: 100vw; height: 100vh;">
+<div id="recordUI" style="position: absolute; bottom: 30px; left: 30px; z-index: 999;">
+        <button id="btnAutoRecord" style="padding: 10px 20px; font-family: 'Fragment Mono', monospace; cursor: pointer; background: #000; color: #fff; border: none; border-radius: 4px; transition: 0.3s;">⏺ Auto Record 1 Loop</button>
+    </div>
         <canvas id="bgCanvas" style="position: absolute; top: 0; left: 0; z-index: 1;"></canvas>
         <canvas id="rendererCanvas" style="position: absolute; top: 0; left: 0; z-index: 2;"></canvas>
     </div>
@@ -76,8 +79,8 @@
             targetRatio: "1:1",
             pitch: 15,
             yaw: -15,
-            targetW: 600,
-            targetH: 600
+            targetW: 400,
+            targetH: 400
         };
 
         const sequence = [
@@ -107,6 +110,7 @@
         let prevH = 400; // 初始化为你的默认高度
         let currentAnimId = null;
         const frustumHeight = 8;
+        let prevIdx = 0;
         const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
 
         const animationModes = {
@@ -132,7 +136,8 @@
             renderer = new THREE.WebGLRenderer({
                 canvas: canvasElement, // 关键：指定画布
                 antialias: true,       // 抗锯齿
-                alpha: true            // 如果你需要背景 Canvas 透出来，这个一定要设为 true
+                alpha: true    ,        // 如果你需要背景 Canvas 透出来，这个一定要设为 true
+                preserveDrawingBuffer: true
             });
 
             // renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -169,11 +174,6 @@
             applyAndSolve();
             startAutoLoop();
         }
-
-        // ==========================================
-        // 核心逻辑 (直接处理求解与渲染)
-        // ==========================================
-        // 存储当前动画 ID 以便随时打断
 
 
         function applyAndSolve() {
@@ -271,48 +271,61 @@
         function startAutoLoop() {
             setInterval(() => {
                 // 切换索引
+                prevIdx = currentIdx;
                 currentIdx = (currentIdx + 1) % sequence.length; // 1. 先更新索引
                 const config = sequence[currentIdx];             // 2. 再获取这个新索引下的配置
 
-                // 2. 加入业务逻辑 Filter
-                // 获取比例字符串，例如 "9:16"
+// ======== 【新增：自动录屏触发器】 ========
+                // 选用 1 作为起点，意味着从最初始的 1:1 状态刚开始向下一个状态变形时开录
+                if (currentIdx === 1) {
+                    if (isRecordingLoop) {
+                        // 已经录了一整圈，回到起点，停止！
+                        stopRecording();
+                    } else if (isWaitingForLoop) {
+                        // 等到了起点，立刻开录！
+                        isWaitingForLoop = false;
+                        startRecording();
+                    }
+                }
+
                 const [w, h] = config.ratio.split(':').map(Number);
                 const isPortraitOrSquare = (w <= h);
-                console.log(`解析比例: ${w}:${h}, 判定结果: ${w <= h ? '竖屏/方屏' : '横屏'}`);
 
-                if (currentMode === 'smooth') {
-
-                    yaw = randomExclude(10, 30, 10, 30);
-                    pitch = randomExclude(10, 30, 10, 30);
-                    if (isPortraitOrSquare && yaw > 0) {
-                        // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
-                        pitch = -Math.abs(pitch);
-                    } else if (!isPortraitOrSquare && yaw > 0) {
-                        // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
-                        pitch = Math.abs(pitch);
-                    }
-                    // 3. 赋值给参数
-                    AABBParams.yaw = yaw;
-                    AABBParams.pitch = pitch;
+                if (currentIdx === 0) {
+                    yaw = -15;
+                    pitch = 15;
                 } else {
+                    if (currentMode === 'smooth') {
 
-                    yaw = randomExclude(10, 20, 10, 20);
-                    if (isPortraitOrSquare && yaw > 0) {
-                        // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
-                        pitch = -15;
-                    } else if (!isPortraitOrSquare && yaw > 0) {
-                        // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
-                        pitch = 15;
+                        yaw = randomExclude(10, 30, 10, 30);
+                        pitch = randomExclude(10, 30, 10, 30);
+                        if (isPortraitOrSquare && yaw > 0) {
+                            // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
+                            pitch = -Math.abs(pitch);
+                        } else if (!isPortraitOrSquare && yaw > 0) {
+                            // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
+                            pitch = Math.abs(pitch);
+                        }
+                        // 3. 赋值给参数
+                        AABBParams.yaw = yaw;
+                        AABBParams.pitch = pitch;
+                    } else {
+
+                        yaw = randomExclude(10, 20, 10, 20);
+                        if (isPortraitOrSquare && yaw > 0) {
+                            // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
+                            pitch = -15;
+                        } else if (!isPortraitOrSquare && yaw > 0) {
+                            // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
+                            pitch = 15;
+
+                        }
+                        // 非平滑模式直接使用预设的角度
 
                     }
-                    // 非平滑模式直接使用预设的角度
-                    AABBParams.yaw = yaw;
-                    AABBParams.pitch = pitch;
                 }
-                // console.log(`--- 切换参数 ---`);
-                // console.log(`切换到: ${sequence[currentIdx].ratio}, 尺寸: ${sequence[currentIdx].w}x${sequence[currentIdx].h}`);
-                // console.log(`随机生成的角度 - Yaw: ${yaw.toFixed(2)}, Pitch: ${pitch.toFixed(2)}`);
-                // 执行更新
+                AABBParams.yaw = yaw;
+                AABBParams.pitch = pitch;
                 applyAndSolve();
             }, interval);
         }
@@ -423,17 +436,17 @@
             // 1. 绘制虚线主体
             ctx.setLineDash([1.5, 5]);
             ctx.beginPath();
-            
+
             if (isVertical) {
-            ctx.moveTo(start.x, start.y+4);
-            ctx.lineTo(end.x, end.y-4);
-            ctx.stroke();
-            ctx.setLineDash([]); // 重置为实线
+                ctx.moveTo(start.x, start.y + 4);
+                ctx.lineTo(end.x, end.y - 4);
+                ctx.stroke();
+                ctx.setLineDash([]); // 重置为实线
             } else {
-            ctx.moveTo(start.x+4, start.y);
-            ctx.lineTo(end.x-4, end.y);
-            ctx.stroke();
-            ctx.setLineDash([]); // 重置为实线
+                ctx.moveTo(start.x + 4, start.y);
+                ctx.lineTo(end.x - 4, end.y);
+                ctx.stroke();
+                ctx.setLineDash([]); // 重置为实线
             }
 
             ctx.lineWidth = 1;
@@ -473,7 +486,7 @@
             });
 
             // 4. 绘制数值文字
-            ctx.font = 'regular 12px Mono';
+            ctx.font = 'medium 12px monospace';
             ctx.textAlign = 'center';
             const midX = (start.x + end.x) / 2;
             const midY = (start.y + end.y) / 2;
@@ -536,7 +549,7 @@
             ctx.restore();
         }
         function resizeCanvases() {
-            const dpr = window.devicePixelRatio || 1; // 获取缩放比，通常是 2 或 3
+            const dpr = window.devicePixelRatio || 3; // 获取缩放比，通常是 2 或 3
             const width = window.innerWidth;
             const height = window.innerHeight;
 
@@ -559,6 +572,101 @@
         resizeCanvases();
         window.addEventListener('resize', resizeCanvases);
 
+        // ==========================================
+        // 录屏模块 (MediaRecorder + Composite Canvas)
+        // ==========================================
+// ==========================================
+        // 自动循环录屏模块 (MediaRecorder + Composite Canvas)
+        // ==========================================
+        let mediaRecorder;
+        let recordedChunks = [];
+        let isRecording = false;
+        
+        // 自动录屏状态控制
+        let isWaitingForLoop = false; // 是否正在等待循环回到起点
+        let isRecordingLoop = false;  // 是否正在录制中
+
+        const compositeCanvas = document.createElement('canvas');
+        const compositeCtx = compositeCanvas.getContext('2d');
+        const btnAutoRecord = document.getElementById('btnAutoRecord');
+
+        // 用户点击按钮，进入等待状态
+        btnAutoRecord.addEventListener('click', () => {
+            if (isWaitingForLoop || isRecordingLoop) return;
+            isWaitingForLoop = true;
+            btnAutoRecord.innerText = "⏳ Waiting for loop start...";
+            btnAutoRecord.style.background = "#ff9900"; // 变成橙色等待
+        });
+
+        // 开始真正的录制（由内部循环触发）
+        function startRecording() {
+            const dpr = window.devicePixelRatio || 3;
+            
+            compositeCanvas.width = window.innerWidth * dpr;
+            compositeCanvas.height = window.innerHeight * dpr;
+            
+            const stream = compositeCanvas.captureStream(30); 
+const options = { 
+            mimeType: 'video/webm; codecs=vp9',
+            videoBitsPerSecond: 10000000 // 强制 10 Mbps 码率 (10000000 bits/s)
+        };
+                    try { mediaRecorder = new MediaRecorder(stream, options); } 
+            catch (e) { mediaRecorder = new MediaRecorder(stream); }
+
+            recordedChunks = [];
+            mediaRecorder.ondataavailable = e => {
+                if (e.data.size > 0) recordedChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = `LogoSystem_Loop_${new Date().getTime()}.webm`;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                }, 100);
+            };
+
+            mediaRecorder.start();
+            isRecording = true;
+            isRecordingLoop = true;
+            
+            btnAutoRecord.innerText = "🔴 Recording Loop...";
+            btnAutoRecord.style.background = "#ff4444"; // 变成红色录制中
+            
+            recordLoop();
+        }
+
+        // 停止录制（由内部循环触发）
+        function stopRecording() {
+            isRecording = false;
+            isRecordingLoop = false;
+            mediaRecorder.stop();
+            
+            btnAutoRecord.innerText = "⏺ Auto Record 1 Loop";
+            btnAutoRecord.style.background = "#000"; // 恢复黑色
+        }
+
+        // 画面合成渲染循环
+        function recordLoop() {
+            if (!isRecording) return;
+compositeCtx.fillStyle = '#ffffff';
+            compositeCtx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+            
+            const bg = document.getElementById('bgCanvas');
+            const fg = document.getElementById('rendererCanvas');
+            
+            if (bg) compositeCtx.drawImage(bg, 0, 0, compositeCanvas.width, compositeCanvas.height);
+            if (fg) compositeCtx.drawImage(fg, 0, 0, compositeCanvas.width, compositeCanvas.height);
+
+            requestAnimationFrame(recordLoop);
+        }
     </script>
 </body>
 

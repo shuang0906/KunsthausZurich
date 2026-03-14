@@ -36,6 +36,7 @@
         let cube, object, box;
         let strip1, strip2, strip3;
         let kGroup;
+        let bgTexture;
 
         const clock = new THREE.Clock();
         let rotPlayhead = 0;
@@ -147,7 +148,7 @@
         const heightParams = {
             auto: false,
             min: 2,
-            max: 4,
+            max: 6,
             period: 2,
             delayStart: 2,
             delayPause: 2
@@ -261,6 +262,7 @@
 
         function rebuildStrips() {
             if (!cube || !object) return;
+
             ensureKGroup();
 
             object.updateMatrixWorld(true);
@@ -339,7 +341,21 @@
             // camera.position.z = 10;
 
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(colorParams.bg);
+            // scene.background = new THREE.Color(colorParams.bg);
+// Remove or comment out this line:
+// scene.background = new THREE.Color(colorParams.bg);
+
+// Add this instead:
+const textureLoader = new THREE.TextureLoader();
+// Replace 'YOUR_IMAGE_URL.jpg' with your actual image path
+bgTexture = textureLoader.load('./assets/images/847-dca-kunsthaus-zuerich-noshe-10-353fe568217a4ecd.jpg', () => {
+    updateBackgroundAspect();
+    render(); // Re-render once the image is fully loaded
+});
+
+// For Three.js r125, ensure colors look correct
+bgTexture.encoding = THREE.sRGBEncoding; 
+scene.background = bgTexture;
 
             renderer = new SVGRenderer();
             //renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -635,33 +651,33 @@
             heightCycleTime = 0;
         }
 
-function resetAllRotations(angle = 0) {
-    let i = 0;
-    scene.traverse((child) => {
-        if (child.parent !== scene) return;
-        
-        // ⬇️ 关键修改：只修改 Y 轴，保留 X 和 Z
-        child.rotation.y = angle; 
-        
-        i++;
-    });
-    rotPlayhead = 0; // optional: reset phase so next start begins clean
-}
-
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-
-            renderer.setSize(window.innerWidth, window.innerHeight);
+        function resetAllRotations(angle = 0) {
+            let i = 0;
+            scene.traverse((child) => {
+                if (child.parent !== scene) return;
+                child.rotation.set(0, angle, 0);
+                i++;
+            });
+            rotPlayhead = 0; // optional: reset phase so next start begins clean
         }
 
-        window.addEventListener('resize', () => {
-            const w = window.innerWidth, h = window.innerHeight;
-            renderer.setSize(w, h);
-            perspCamera.aspect = w / h;
-            perspCamera.updateProjectionMatrix();
-            syncOrthoFrustum();
-        });
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    
+    updateBackgroundAspect(); // Add this line
+}
+
+window.addEventListener('resize', () => {
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w, h);
+    perspCamera.aspect = w / h;
+    perspCamera.updateProjectionMatrix();
+    syncOrthoFrustum();
+    
+    updateBackgroundAspect(); // Add this line
+});
 
         function render() {
             renderer.render(scene, camera);
@@ -732,6 +748,27 @@ function resetAllRotations(angle = 0) {
         });
 
         updateExportButtons(renderer);
+
+// This function simulates 'background-size: cover' inside the WebGL Canvas
+function updateBackgroundAspect() {
+    if (!bgTexture || !bgTexture.image) return;
+
+    const canvasAspect = window.innerWidth / window.innerHeight;
+    const imageAspect = bgTexture.image.width / bgTexture.image.height;
+
+    // Reset matrix auto update so our manual offsets work
+    bgTexture.matrixAutoUpdate = true; 
+
+    if (canvasAspect > imageAspect) {
+        // Window is wider than the image: scale height to fit
+        bgTexture.repeat.set(1, imageAspect / canvasAspect);
+        bgTexture.offset.set(0, (1 - bgTexture.repeat.y) / 2);
+    } else {
+        // Window is taller than the image: scale width to fit
+        bgTexture.repeat.set(canvasAspect / imageAspect, 1);
+        bgTexture.offset.set((1 - bgTexture.repeat.x) / 2, 0);
+    }
+}
 
         //====================GUI functions end====================
     </script>

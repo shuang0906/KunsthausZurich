@@ -94,7 +94,7 @@
         const baseDims = { w: 4, h: 2, d: 2 };
 
         const boxParams = {
-            kStroke: 0.2,
+            kStroke: 0.15,
             width: baseDims.w,
             height: baseDims.h,
             depth: baseDims.d
@@ -136,8 +136,8 @@
 
         const AABBParams = {
             targetRatio: "1:1",
-            pitch: 15,
-            yaw: 30,
+            pitch: -15,
+            yaw: 15,
             targetW: 400,
             targetH: 400,
             rotAnimation: true,
@@ -872,13 +872,13 @@
 
         const AABBFolder = gui.addFolder('Settings');
         targetCtrl = AABBFolder.add(AABBParams, 'targetRatio').name('Target W/H');
-        yawCtrl = AABBFolder.add(AABBParams, 'yaw', -180, 180, 0.01).name('Yaw (°)');
-        pitchCtrl = AABBFolder.add(AABBParams, 'pitch', -180, 180, 0.01).name('Pitch (°)');
-        AABBFolder.add(AABBParams, 'targetW', 100, window.innerWidth - 100, 1).name('Max Width (Landscape)');
-        AABBFolder.add(AABBParams, 'targetH', 100, window.innerHeight - 100, 1).name('Max Height (Portrait / Square)');
-        AABBFolder.add(AABBParams, 'rotAnimation').name('Rotation Animation');
+        yawCtrl = AABBFolder.add(AABBParams, 'yaw', -180, 180, 0.01).name('Yaw');
+        pitchCtrl = AABBFolder.add(AABBParams, 'pitch', -180, 180, 0.01).name('Pitch');
+        AABBFolder.add(AABBParams, 'targetW', 100, window.innerWidth - 100, 1).name('Max W');//(Landscape)
+        AABBFolder.add(AABBParams, 'targetH', 100, window.innerHeight - 100, 1).name('Max H');//(Portrait / Square)
+        AABBFolder.add(AABBParams, 'rotAnimation').name('Rot Animation');
         AABBFolder.add(AABBParams, 'zoomAnimation').name('Zoom Animation');
-        AABBFolder.add(AABBParams, 'duration', 0.1, 2, 0.1).name('Duration (s)');
+        AABBFolder.add(AABBParams, 'duration', 0.1, 2, 0.1).name('Duration');
         AABBFolder.add(AABBParams, 'applyAndSolve').name('Apply Angles');
         AABBFolder.add(AABBParams, 'randomAndSolve').name('Random Rotate');
 
@@ -898,7 +898,7 @@
                 el: row
             };
         }
-        info = addLabel(AABBFolder, 'Ready');
+        //info = addLabel(AABBFolder, 'Ready');
 
         const exportFolder = gui.addFolder('Export');
 

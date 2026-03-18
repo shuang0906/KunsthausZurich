@@ -211,6 +211,20 @@
             renderer.render(scene, camera);
         }
 
+
+        function getOrthographicScale(pStartWorld, pEndWorld, dirWorld, targetHeight) {
+            const dx = pEndWorld.x - pStartWorld.x;
+            const dy = pEndWorld.y - pStartWorld.y;
+            const length2D = Math.sqrt(dx * dx + dy * dy);
+
+            if (length2D < 0.0001) return 0;
+
+            const cross2D = Math.abs(dx * dirWorld.y - dy * dirWorld.x);
+            if (cross2D < 0.0001) return targetHeight;
+
+            return (targetHeight * length2D) / cross2D;
+        }
+
         function rebuildStrips() {
             if (!geo || !mesh) return;
             if (!kGroup) { kGroup = new THREE.Group(); scene.add(kGroup); }
@@ -223,20 +237,33 @@
 
             mesh.updateMatrixWorld(true);
 
-            // 【核心修改点】：根据像素严格换算 3D 世界粗细
+            // 先保留 stationary 原本的“像素 -> 世界单位”换算
             const strokePx = parseFloat(document.getElementById('strokeInput').value) || 4;
-            // 数学原理：1 像素对应世界单位 = (视锥体高度) / (画布高度 * 相机Zoom)
             const absoluteStroke = (strokePx * frustumHeight) / (currentTargetH * camera.zoom);
 
-            const qWorld = new THREE.Quaternion();
-            mesh.getWorldQuaternion(qWorld);
+            const v1 = worldVertex(geo, 1, mesh);
+            const v2 = worldVertex(geo, 2, mesh);
+            const v5 = worldVertex(geo, 5, mesh);
+            const v7 = worldVertex(geo, 7, mesh);
+            const vMid57 = v5.clone().add(v7).multiplyScalar(0.5);
+            const vS3End = vMid57.clone().lerp(v1, 0.2);
 
-            const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
-            const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            // 用 matrixWorld 的基向量保留 stationary 当前 scale/rotation 的结果
+            const axisXWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 0);
+            const axisYWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 1);
 
-            const s1 = makeStrip(worldVertex(geo, 5, mesh), worldVertex(geo, 7, mesh), axisX, matWhiteDS);
-            const s2 = makeStrip(worldVertex(geo, 1, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
-            const s3 = makeCenteredStrip(worldVertex(geo, 2, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5).lerp(worldVertex(geo, 1, mesh), 0.2), axisY, matWhiteDS);
+            // 把 samestroke-cal 的“动态算粗细”逻辑接到 stationary 里
+            const scaleS1 = getOrthographicScale(v5, v7, axisXWorld, absoluteStroke);
+            const scaleS2 = getOrthographicScale(v1, vMid57, axisYWorld, absoluteStroke);
+            const scaleS3 = getOrthographicScale(v2, vS3End, axisYWorld, absoluteStroke);
+
+            const offsetS1 = axisXWorld.clone().multiplyScalar(scaleS1);
+            const offsetS2 = axisYWorld.clone().multiplyScalar(-scaleS2);
+            const offsetS3 = axisYWorld.clone().multiplyScalar(scaleS3);
+
+            const s1 = makeStrip(v5, v7, offsetS1, matWhiteDS);
+            const s2 = makeStrip(v1, vMid57, offsetS2, matWhiteDS);
+            const s3 = makeCenteredStrip(v2, vS3End, offsetS3, matWhiteDS);
 
             kGroup.add(s1, s2, s3);
         }

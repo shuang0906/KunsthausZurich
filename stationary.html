@@ -6,7 +6,8 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Logo Composer — 恒定线宽版</title>
     <style>
-        body, html {
+        body,
+        html {
             margin: 0;
             padding: 0;
             overflow: hidden;
@@ -38,7 +39,7 @@
         #rendererCanvas svg {
             max-width: 90vw;
             max-height: 90vh;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
             background-color: #fff;
         }
 
@@ -128,9 +129,9 @@
 
         let renderer, scene, camera, mesh, kGroup, geo;
         const frustumHeight = 8;
-        
+
         // 记录当前的画布高度，用于像素换算
-        let currentTargetH = 300; 
+        let currentTargetH = 300;
 
         const colorParams = {
             cStroke: '#000000',
@@ -168,19 +169,19 @@
             const yaw = parseFloat(document.getElementById('yawInput').value) || 0;
 
             let [rw, rh] = ratioStr.includes(':') ? ratioStr.split(':').map(Number) : [parseFloat(ratioStr), 1];
-            if (!rw || !rh) { rw = 400; rh = 300; } 
+            if (!rw || !rh) { rw = 400; rh = 300; }
 
-            const targetW = rw*3;
-            const targetH = rh*3;
+            const targetW = rw * 3;
+            const targetH = rh * 3;
             const t = targetW / targetH;
-            
+
             // 更新全局变量，用于 rebuildStrips 里的像素换算
             currentTargetH = targetH;
 
             // 1. 更新渲染器尺寸和相机比例
             renderer.setSize(targetW, targetH);
             const aspect = targetW / targetH;
-            
+
             camera.left = -frustumHeight * aspect / 2;
             camera.right = frustumHeight * aspect / 2;
             camera.top = frustumHeight / 2;
@@ -239,7 +240,8 @@
 
             kGroup.add(s1, s2, s3);
         }
-function saveSVG() {
+        
+        function saveSVG() {
             const svgElement = renderer.domElement;
             const serializer = new XMLSerializer();
             let svgString = serializer.serializeToString(svgElement);
@@ -252,14 +254,14 @@ function saveSVG() {
             const url = URL.createObjectURL(blob);
             const link = document.createElement("a");
             link.href = url;
-            
+
             // 获取当前输入的比例，并将冒号替换为 x 以符合操作系统的文件名规范
             let ratioStr = document.getElementById('ratioInput').value;
             let safeRatioName = ratioStr.replace(/:/g, 'x');
-            
+
             // 动态设置文件名
             link.download = `logo-${safeRatioName}.svg`;
-            
+
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -284,17 +286,17 @@ function saveSVG() {
         function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
         function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
         function deg2rad(d) { return d * Math.PI / 180; }
-        
+
         function getAbsR01(o) {
             const m = new THREE.Matrix4().makeRotationFromQuaternion(o.getWorldQuaternion(new THREE.Quaternion())).elements;
             return { a00: Math.abs(m[0]), a01: Math.abs(m[4]), a02: Math.abs(m[8]), a10: Math.abs(m[1]), a11: Math.abs(m[5]), a12: Math.abs(m[9]) };
         }
-        
-        function solveHxForWH(t, R) { 
-            return { 
-                hx: (t * (R.a11 + R.a12) - (R.a01 + R.a02)) / (R.a00 - t * R.a10), 
-                denom: (R.a00 - t * R.a10) 
-            }; 
+
+        function solveHxForWH(t, R) {
+            return {
+                hx: (t * (R.a11 + R.a12) - (R.a01 + R.a02)) / (R.a00 - t * R.a10),
+                denom: (R.a00 - t * R.a10)
+            };
         }
 
     </script>

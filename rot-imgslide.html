@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>Logo Generator — Kunsthaus Zürich</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <script type="importmap">
+			{
+				"imports": {
+                    "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js",
+                    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.125.0/examples/jsm/"
+				}
+			}
+		</script>
+
+    <script type="module">
+
+        import * as THREE from 'three';
+
+        import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+        import { saveCurrentSVG, startCanvasRecording } from './export.js';
+
+        const container = document.body;
+        let camera, controls, scene, renderer, labelRenderer;
+        let perspCamera, orthoCamera;
+        let cube, object, box;
+        let strip1, strip2, strip3;
+        let kGroup;
+
+        const clock = new THREE.Clock();
+        let rotPlayhead = 0;
+
+        const baseDims = { w: 4, h: 2, d: 2 };
+
+        const boxParams = {
+            kStroke: 0.15,
+            width: baseDims.w,
+            height: baseDims.h,
+            depth: baseDims.d
+        };
+
+        function applyBoxSize() {
+            if (!object) return;
+
+            object.scale.set(
+                boxParams.width / baseDims.w,
+                boxParams.height / baseDims.h,
+                boxParams.depth / baseDims.d
+            );
+            object.updateMatrixWorld(true);
+
+            box.update();
+            rebuildStrips();
+        }
+
+        const rotParams = { x: 0, y: 0, z: 0, step: 0.1, enabled: false, period: 6 };
+
+        function applyRotation() {
+            const rx = THREE.MathUtils.degToRad(rotParams.x);
+            const ry = THREE.MathUtils.degToRad(rotParams.y);
+            const rz = THREE.MathUtils.degToRad(rotParams.z);
+            scene.traverse((child) => {
+                if (child.parent !== scene) return;
+                child.rotation.set(rx, ry, rz);
+            });
+        }
+
+        const colorParams = {
+            bg: '#ffffff',
+            cStroke: '#000000',
+        };
+
+        const strokeMats = new Set();
+
+        function trackStrokeMaterial(mat) {
+            // tag & set initial color
+            if (mat && mat.color) mat.color.set(colorParams.cStroke);
+            strokeMats.add(mat);
+            return mat; // so you can inline it
+        }
+
+        function setStrokeColor(v) {
+            strokeMats.forEach((mat) => {
+                if (!mat) return;
+                if (Array.isArray(mat)) {
+                    mat.forEach(m => m?.color?.set(v));
+                } else {
+                    mat.color?.set(v);
+                }
+            });
+        }
+
+        const matWhiteDS = trackStrokeMaterial(
+            new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide })
+        );
+        const matLine = trackStrokeMaterial(
+            new THREE.LineBasicMaterial({ color: colorParams.cStroke })
+        );
+
+        let strokePlayhead = 0;
+        let strokeCycleTime = 0;
+
+        const strokeParams = {
+            auto: false,
+            min: 0.05,
+            max: 0.2,
+            period: 3.0,
+            delayPause: 3,
+            delayStart: 0,
+        };
+
+        function setStroke(w) {
+            boxParams.kStroke = w;
+            rebuildStrips();
+        }
+
+        let widthPlayhead = 0;
+        let widthCycleTime = 0;
+
+        const widthParams = {
+            auto: false,
+            min: 2,
+            max: 6,
+            period: 2,
+            delayPause: 2,
+            delayStart: 0,
+        };
+
+        function setBoxWidth(w) {
+            boxParams.width = w;
+            applyBoxSize();
+        }
+
+        let heightPlayhead = 0;
+        let heightCycleTime = 0;
+
+        const heightParams = {
+            auto: false,
+            min: 2,
+            max: 4,
+            period: 2,
+            delayStart: 2,
+            delayPause: 2
+        };
+
+        function setBoxHeight(h) {
+            boxParams.height = h;
+            applyBoxSize();
+        }
+
+        const svgParams = {
+            filename: 'logo.svg',
+            background: true,
+            save: () => saveCurrentSVG(renderer.domElement, svgParams.filename, svgParams.background),
+        };
+
+        const recParams = {
+            seconds: 6.0,
+            fps: 60,
+            filename: 'capture.webm'
+        };
+
+        init();
+
+        //====================strip functions start====================
+        function worldToScreen(point, camera, renderer) {
+            const p = point.clone().project(camera);
+
+            const width = renderer.domElement.clientWidth;
+            const height = renderer.domElement.clientHeight;
+
+            return {
+                x: (p.x * 0.5 + 0.5) * width,
+                y: (-p.y * 0.5 + 0.5) * height
+            };
+        }
+
+        function worldVertex(geometry, i, mesh) {
+            return new THREE.Vector3().fromBufferAttribute(geometry.attributes.position, i).applyMatrix4(mesh.matrixWorld);
+        }
+
+        // Quad builder with UVs
+        function makeQuad(p0, p1, p2, p3, material) {
+            const g = new THREE.BufferGeometry();
+            g.setAttribute(
+                'position',
+                new THREE.Float32BufferAttribute([
+                    p0.x, p0.y, p0.z,
+                    p1.x, p1.y, p1.z,
+                    p2.x, p2.y, p2.z,
+                    p3.x, p3.y, p3.z
+                ], 3)
+            );
+            // assume points are ordered around the perimeter (p0->p1->p2->p3)
+            g.setIndex([0, 1, 2, 0, 2, 3]);
+            g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+            g.computeVertexNormals();
+            g.computeBoundingSphere();
+            return new THREE.Mesh(g, material);
+        }
+
+        // Build a “strip” from segment A->B with a single offset vector
+        function makeStrip(A, B, offset, material) {
+            return makeQuad(
+                A.clone(),                   // p0
+                B.clone(),                   // p1
+                B.clone().add(offset),       // p2
+                A.clone().add(offset),       // p3
+                material
+            );
+        }
+
+        // Build strips those offset applied in opposite dirs
+        function makeCenteredStrip(A, B, offset, material) {
+            return makeQuad(
+                A.clone(),   // p0
+                A.clone().add(offset),   // p3
+                B.clone(),   // p1
+                B.clone().sub(offset),   // p2
+                material
+            );
+        }
+
+        // Remove old strips safely
+        function ensureKGroup() {
+            if (!kGroup) {
+                kGroup = new THREE.Group();
+                scene.add(kGroup);              // kGroup is a top-level node the animator rotates
+            }
+        }
+
+        // clear children but keep kGroup (so its rotation is preserved)
+        function clearStrips() {
+            if (!kGroup) return;
+            for (let i = kGroup.children.length - 1; i >= 0; i--) {
+                const m = kGroup.children[i];
+                kGroup.remove(m);
+                m.geometry?.dispose();
+                // m.material?.dispose(); // only dispose if you don't reuse matWhiteDS
+            }
+        }
+
+        function rebuildStrips() {
+            if (!cube || !object) return;
+            ensureKGroup();
+
+            object.updateMatrixWorld(true);
+            box.update(); // BoxHelper stays as-is; we don't recreate it
+
+            // --- define all the points explicitly ---
+            // line 1 (5 -> 7)
+            const vStart1 = worldVertex(cube, 5, object);
+            const vEnd1 = worldVertex(cube, 7, object);
+            const xOffset = new THREE.Vector3(boxParams.kStroke, 0, 0);
+
+            // line 2 (index 1 -> midpoint of line 1)
+            const vStart2 = worldVertex(cube, 1, object);
+            const vEnd2 = vStart1.clone().add(vEnd1).multiplyScalar(0.5);
+            const t = 0.1;
+            const vStart3 = vEnd2.clone().lerp(vStart2, t);
+
+            // line 3 (vStart3 -> index 2)
+            const v2 = worldVertex(cube, 2, object);
+
+            // offsets
+            const yOffsetNeg = new THREE.Vector3(0, -boxParams.kStroke, 0);
+            const yOffsetPos = new THREE.Vector3(0, boxParams.kStroke, 0);
+
+            // --- rebuild the three strips inside kGroup ---
+            clearStrips();
+
+            let s1 = makeStrip(vStart1, vEnd1, xOffset, matWhiteDS);
+            let s2 = makeStrip(vStart2, vEnd2, yOffsetNeg, matWhiteDS);
+            let s3 = makeCenteredStrip(v2, vStart3, yOffsetPos, matWhiteDS);
+
+            // addOutline(s1);
+            // addOutline(s2);
+            // addOutline(s3);
+
+            // per-strip depth tweaks
+            s1.material.depthWrite = false;
+            s2.material.depthWrite = false;
+            s1.renderOrder = 0;
+            s2.renderOrder = 1;
+
+            kGroup.add(s1, s2, s3);
+
+            // keep references if you use them elsewhere
+            strip1 = s1; strip2 = s2; strip3 = s3;
+        }
+
+        function addOutline(strip, alwaysOnTop = true) {
+            const edges = new THREE.EdgesGeometry(strip.geometry, 1); // 1° threshold
+
+            // Make the outline always visible on top:
+            if (alwaysOnTop) {
+                matLine.depthTest = false;   // ignore depth test
+                matLine.depthWrite = false;   // don't write to depth
+            }
+
+            const lines = new THREE.LineSegments(edges, matLine);
+            lines.renderOrder = (strip.renderOrder || 0) + 10; // draw after the fill
+            strip.add(lines); // parent so it follows transforms
+            return lines;
+        }
+
+        //====================strip functions end====================
+
+        function init() {
+
+            perspCamera = new THREE.PerspectiveCamera(33, window.innerWidth / window.innerHeight, 0.1, 100);
+            perspCamera.position.z = 10;
+
+            // 2. Initialize Ortho Camera immediately
+            orthoCamera = makeMatchingOrtho(perspCamera);
+
+            // 3. Set the ACTIVE camera to ortho
+            camera = orthoCamera;
+            // camera = new THREE.PerspectiveCamera(33, window.innerWidth / window.innerHeight, 0.1, 100);
+            // camera.position.z = 10;
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(colorParams.bg);
+
+            // renderer = new SVGRenderer();
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            // controls
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.listenToKeyEvents(window);
+
+            controls.enableDamping = true; // an animation loop is required when either damping or auto-rotation are enabled
+            controls.dampingFactor = 0.05;
+            controls.minDistance = 5;
+            controls.maxDistance = 50;
+            controls.screenSpacePanning = false;
+
+            const loader = new THREE.TextureLoader();
+
+            // 2. 加载图片纹理
+            const textureSide = loader.load('./assets/images/Alberto/multimedia-320474.large.jpg');
+            const textureBack = loader.load('./assets/images/Scheidegger/e-scheidegger_174.max-800x800.jpg');
+
+            // 使用这个材质应用到你的 Mesh 上
+            const redMat = new THREE.MeshBasicMaterial({ color: 0xff000, visible: false });
+            renderer.outputEncoding = THREE.sRGBEncoding;
+
+            const materials = [
+                new THREE.MeshBasicMaterial({ map: textureSide }),
+                redMat, // -x
+                redMat, // +y
+                redMat, // -y
+                redMat, // +z
+                new THREE.MeshBasicMaterial({ map: textureBack }),
+            ];
+
+            // 4. 创建几何体和物体
+            cube = new THREE.BoxGeometry(baseDims.w, baseDims.h, baseDims.d);
+            object = new THREE.Mesh(cube, materials);
+            scene.add(object);
+            box = new THREE.BoxHelper(object, colorParams.cStroke);
+            box.matrixAutoUpdate = true;
+            scene.add(box);
+
+            rebuildStrips();
+            applyRotation();
+
+            window.addEventListener('resize', onWindowResize);
+
+        }
+
+        //====================camera functions start====================
+        // keep your existing perspective camera as the "master"
+        // const perspCamera = camera;
+
+        // make an ortho camera that matches what the perspective camera sees at the controls target
+        function makeMatchingOrtho(pcam) {
+            const aspect = window.innerWidth / window.innerHeight;
+            const d = 10; // Default distance if controls aren't ready yet
+            const halfH = Math.tan(THREE.MathUtils.degToRad(pcam.fov * 0.5)) * d;
+            const halfW = halfH * aspect;
+
+            const ocam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, pcam.near, pcam.far);
+            ocam.position.copy(pcam.position);
+            ocam.updateProjectionMatrix();
+            return ocam;
+        }
+
+        // keep the ortho frustum in sync with current perspective settings/pose
+        function syncOrthoFrustum() {
+            const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
+            const d = perspCamera.position.distanceTo(controls.target);
+            const halfH = Math.tan(THREE.MathUtils.degToRad(perspCamera.fov * 0.5)) * d;
+            const halfW = halfH * aspect;
+            orthoCamera.left = -halfW;
+            orthoCamera.right = halfW;
+            orthoCamera.top = halfH;
+            orthoCamera.bottom = -halfH;
+            // align pose when switching back/forth
+            if (camera === perspCamera) {
+                orthoCamera.position.copy(perspCamera.position);
+                orthoCamera.quaternion.copy(perspCamera.quaternion);
+            }
+            orthoCamera.near = perspCamera.near;
+            orthoCamera.far = perspCamera.far;
+            controls.minZoom = 1;
+            controls.maxZoom = 5.0;
+            orthoCamera.updateProjectionMatrix();
+        }
+
+        // update when orbiting/zooming
+        controls.addEventListener('change', () => {
+            if (camera === perspCamera) {
+                syncOrthoFrustum();
+            } else {
+                // keep persp pose following ortho so switching back is seamless
+                perspCamera.position.copy(orthoCamera.position);
+                perspCamera.quaternion.copy(orthoCamera.quaternion);
+                syncOrthoFrustum();
+            }
+        });
+
+        //====================camera functions end====================
+
+        //====================render functions start====================
+
+        let currentRenderer = 'SVG (SVG Output)'; // or 'SVG'
+
+        function createRenderer(kind) {
+            if (kind === 'SVG (SVG Output)') {
+                const r = new SVGRenderer();
+                r.setSize(window.innerWidth, window.innerHeight);
+                return r;
+            } else {
+                const r = new THREE.WebGLRenderer({ antialias: true });
+                r.setPixelRatio(window.devicePixelRatio);
+                r.setSize(window.innerWidth, window.innerHeight);
+                return r;
+            }
+        }
+
+        function recreateControls() {
+            // stash previous options (if you care to preserve them)
+            const opts = {
+                enableDamping: controls?.enableDamping ?? true,
+                dampingFactor: controls?.dampingFactor ?? 0.05,
+                screenSpacePanning: controls?.screenSpacePanning ?? false,
+                target: controls?.target?.clone() ?? new THREE.Vector3()
+            };
+            controls?.dispose();
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.listenToKeyEvents(window);
+            controls.enableDamping = opts.enableDamping;
+            controls.dampingFactor = opts.dampingFactor;
+            controls.screenSpacePanning = opts.screenSpacePanning;
+            controls.target.copy(opts.target);
+            controls.update();
+        }
+
+        function switchRenderer(kind) {
+            if (kind === currentRenderer) return;
+
+            // remove old canvas/svg
+            if (renderer) {
+                renderer.domElement?.parentNode?.removeChild(renderer.domElement);
+                // WebGLRenderer has dispose; SVGRenderer does not
+                if (renderer.dispose) renderer.dispose();
+            }
+
+            renderer = createRenderer(kind);
+            container.appendChild(renderer.domElement);
+            recreateControls();
+
+            currentRenderer = kind;
+            updateExportButtons(renderer);
+        }
+
+        //====================render functions end====================
+
+        //====================export functions start====================
+
+        const recordActions = {
+            startRecord() {
+                updateButtonsName("exportVideoCtrl");
+                startCanvasRecording(renderer, {
+                    seconds: recParams.seconds,
+                    fps: recParams.fps,
+                    filename: recParams.filename
+                });
+            }
+        };
+
+        //====================export functions end====================
+
+        //====================animation functions start====================
+
+        const animActions = {
+            startAnimation() {
+                resetAllRotations(0);
+                // Commit any active GUI text inputs
+                if (document.activeElement && document.activeElement.blur) {
+                    document.activeElement.blur();
+                }
+
+                resetAnimStroke();
+                resetAnimBoxWidth();
+                resetAnimBoxHeight();
+            }
+        };
+
+        const comboActions = {
+            startAnimRecord() {
+                updateButtonsName("exportVideoAnimCtrl");
+                animActions.startAnimation();
+                recordActions.startRecord();
+            }
+        };
+// 1. 定义目标角度，初始等于你当前的 rotParams.y
+let targetRotY = rotParams.y || 0;
+
+// 2. 设置一个定时器：每隔 3 秒（3000毫秒），目标角度增加 90 度
+setInterval(() => {
+    targetRotY += 90;
+}, 2000);
+
+// 3. 你的动画渲染循环
+function animate() {
+    requestAnimationFrame(animate);
+
+    // 【关键】平滑插值算法：让当前角度不断逼近目标角度
+    // 0.05 是旋转速度/平滑度，数字越大转得越快，可根据喜好微调
+    if (Math.abs(targetRotY - rotParams.y) > 0.01) {
+        rotParams.y = THREE.MathUtils.lerp(rotParams.y, targetRotY, 0.03);
+        
+        // 调用你现有的方法应用旋转
+        applyRotation(); 
+    }
+
+    // 更新控制器 (damping 需要)
+    controls.update(); 
+
+    // 渲染画面
+    renderer.render(scene, camera);
+    labelRenderer.render(scene, camera);
+}
+
+// 确保在 init() 结尾处调用 animate() 启动循环
+animate();
+        function resetAnimStroke() {
+            strokePlayhead = 0;
+            strokeCycleTime = 0;
+        }
+
+        function resetAnimBoxWidth() {
+            widthPlayhead = 0;
+            widthCycleTime = 0;
+        }
+
+        function resetAnimBoxHeight() {
+            heightPlayhead = 0;
+            heightCycleTime = 0;
+        }
+
+        function resetAllRotations(angle = 0) {
+            let i = 0;
+            scene.traverse((child) => {
+                if (child.parent !== scene) return;
+
+                // ⬇️ 关键修改：只修改 Y 轴，保留 X 和 Z
+                child.rotation.y = angle;
+
+                i++;
+            });
+            rotPlayhead = 0; // optional: reset phase so next start begins clean
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        window.addEventListener('resize', () => {
+            const w = window.innerWidth, h = window.innerHeight;
+            renderer.setSize(w, h);
+            perspCamera.aspect = w / h;
+            perspCamera.updateProjectionMatrix();
+            syncOrthoFrustum();
+        });
+
+        function render() {
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        //====================animation functions end====================
+
+        //====================GUI functions start====================
+
+        import {
+            getGUI,
+            addRendererUI,
+            addCameraUI,
+            addBoxHelperUI,
+            addColorUI,
+            addStaticUI,
+            addAnimationUI,
+            addExportUI,
+        } from './gui.js';
+
+        const gui = getGUI();
+
+        addRendererUI({ switchRenderer });
+
+        addCameraUI({
+            getCamera: () => camera,
+            setCamera: (cam) => { camera = cam; },
+            perspCamera, orthoCamera, controls, syncOrthoFrustum
+        });
+
+        addBoxHelperUI({
+            box,
+        });
+
+        addColorUI({
+            scene,
+            box,
+            colorParams,
+            setStrokeColor,
+        });
+
+        addStaticUI({
+            rebuildStrips,
+            boxParams,
+            applyBoxSize,
+            rotParams,
+            applyRotation,
+        });
+
+        addAnimationUI({
+            rotParams,
+            strokeParams,
+            resetAnimStroke,
+            widthParams,
+            resetAnimBoxWidth,
+            heightParams,
+            resetAnimBoxHeight,
+            animActions
+        });
+
+        const { updateExportButtons, updateButtonsName } = addExportUI({
+            svgParams,
+            recParams,
+            recordActions,
+            comboActions
+        });
+
+        updateExportButtons(renderer);
+
+        //====================GUI functions end====================
+    </script>
+</body>
+
+</html>

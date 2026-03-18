@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>Logo Generator — Kunsthaus Zürich</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <button id="exportGLB" style="position: absolute; top: 10px; left: 10px; z-index: 100;">Export GLB</button>
+    <script type="importmap">
+			{
+				"imports": {
+                    "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js",
+                    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.125.0/examples/jsm/"
+				}
+			}
+		</script>
+
+    <script type="module">
+
+        import * as THREE from 'three';
+
+        import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+        import { saveCurrentSVG, startCanvasRecording } from './export.js';
+        import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+        const container = document.body;
+        let camera, controls, scene, renderer, labelRenderer;
+        let perspCamera, orthoCamera;
+        let cube, object, box;
+        let strip1, strip2, strip3;
+        let kGroup;
+
+        // 在外部维护引用，方便随时清理
+        let stripS1 = null;
+        let stripS2 = null;
+        let stripS3 = null;
+        let patchMesh = null;
+
+        const clock = new THREE.Clock();
+        let rotPlayhead = 0;
+
+        const baseDims = { w: 2, h: 2, d: 2 };
+
+        const boxParams = {
+            kStroke: 0.15,
+            width: baseDims.w,
+            height: baseDims.h,
+            depth: baseDims.d
+        };
+
+        function applyBoxSize() {
+            if (!object) return;
+
+            object.scale.set(
+                boxParams.width / baseDims.w,
+                boxParams.height / baseDims.h,
+                boxParams.depth / baseDims.d
+            );
+            object.updateMatrixWorld(true);
+
+            box.update();
+            rebuildStrips();
+        }
+
+        const rotParams = { x: 0, y: 0, z: 0, step: 0.1, enabled: false, period: 6 };
+
+        function applyRotation() {
+            const rx = THREE.MathUtils.degToRad(rotParams.x);
+            const ry = THREE.MathUtils.degToRad(rotParams.y);
+            const rz = THREE.MathUtils.degToRad(rotParams.z);
+            scene.traverse((child) => {
+                if (child.parent !== scene) return;
+                child.rotation.set(rx, ry, rz);
+            });
+            rebuildStrips(); // if your strips depend on world positions, you may need to rebuild them after rotation
+        }
+
+        const colorParams = {
+            bg: '#ffffff',
+            cStroke: '#000000',
+        };
+
+        const strokeMats = new Set();
+
+        function trackStrokeMaterial(mat) {
+            // tag & set initial color
+            if (mat && mat.color) mat.color.set(colorParams.cStroke);
+            strokeMats.add(mat);
+            return mat; // so you can inline it
+        }
+
+        function setStrokeColor(v) {
+            strokeMats.forEach((mat) => {
+                if (!mat) return;
+                if (Array.isArray(mat)) {
+                    mat.forEach(m => m?.color?.set(v));
+                } else {
+                    mat.color?.set(v);
+                }
+            });
+        }
+
+        const matWhiteDS = trackStrokeMaterial(
+            new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
+        );
+        const matLine = trackStrokeMaterial(
+            new THREE.LineBasicMaterial({ color: colorParams.cStroke })
+        );
+
+        let strokePlayhead = 0;
+        let strokeCycleTime = 0;
+
+        const strokeParams = {
+            auto: false,
+            min: 0.05,
+            max: 0.2,
+            period: 3.0,
+            delayPause: 3,
+            delayStart: 0,
+        };
+
+        function setStroke(w) {
+            boxParams.kStroke = w;
+            rebuildStrips();
+        }
+
+        let widthPlayhead = 0;
+        let widthCycleTime = 0;
+
+        const widthParams = {
+            auto: false,
+            min: 2,
+            max: 6,
+            period: 2,
+            delayPause: 2,
+            delayStart: 0,
+        };
+
+        function setBoxWidth(w) {
+            boxParams.width = w;
+            applyBoxSize();
+        }
+
+        let heightPlayhead = 0;
+        let heightCycleTime = 0;
+
+        const heightParams = {
+            auto: false,
+            min: 2,
+            max: 4,
+            period: 2,
+            delayStart: 2,
+            delayPause: 2
+        };
+
+        function setBoxHeight(h) {
+            boxParams.height = h;
+            applyBoxSize();
+        }
+
+        const svgParams = {
+            filename: 'logo.svg',
+            background: true,
+            save: () => saveCurrentSVG(renderer.domElement, svgParams.filename, svgParams.background),
+        };
+
+        const recParams = {
+            seconds: 6.0,
+            fps: 60,
+            filename: 'capture.webm'
+        };
+
+        init();
+
+        //====================strip functions start====================
+        function worldToScreen(point, camera, renderer) {
+            const p = point.clone().project(camera);
+
+            const width = renderer.domElement.clientWidth;
+            const height = renderer.domElement.clientHeight;
+
+            return {
+                x: (p.x * 0.5 + 0.5) * width,
+                y: (-p.y * 0.5 + 0.5) * height
+            };
+        }
+
+        function worldVertex(geometry, i, mesh) {
+            return new THREE.Vector3().fromBufferAttribute(geometry.attributes.position, i).applyMatrix4(mesh.matrixWorld);
+        }
+
+        // Quad builder with UVs
+        function makeQuad(p0, p1, p2, p3, material) {
+            const g = new THREE.BufferGeometry();
+            g.setAttribute(
+                'position',
+                new THREE.Float32BufferAttribute([
+                    p0.x, p0.y, p0.z,
+                    p1.x, p1.y, p1.z,
+                    p2.x, p2.y, p2.z,
+                    p3.x, p3.y, p3.z
+                ], 3)
+            );
+            // assume points are ordered around the perimeter (p0->p1->p2->p3)
+            g.setIndex([0, 1, 2, 0, 2, 3]);
+            g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+            g.computeVertexNormals();
+            g.computeBoundingSphere();
+            return new THREE.Mesh(g, material);
+        }
+
+        // Build strips those offset applied in opposite dirs
+        function makeCenteredStrip(A, B, offset, material) {
+            return makeQuad(
+                A.clone(),   // p0
+                A.clone().add(offset),   // p3
+                B.clone(),   // p1
+                B.clone().sub(offset),   // p2
+                material
+            );
+        }
+
+        // Remove old strips safely
+        function ensureKGroup() {
+            if (!kGroup) {
+                kGroup = new THREE.Group();
+                scene.add(kGroup);              // kGroup is a top-level node the animator rotates
+            }
+        }
+
+        // clear children but keep kGroup (so its rotation is preserved)
+        function clearStrips() {
+            if (!kGroup) return;
+            for (let i = kGroup.children.length - 1; i >= 0; i--) {
+                const m = kGroup.children[i];
+                kGroup.remove(m);
+                m.geometry?.dispose();
+                // m.material?.dispose(); // only dispose if you don't reuse matWhiteDS
+            }
+        }
+
+        // 1. 独立出去的通用数学与几何工具函数
+        // ==========================================
+
+
+        /**
+         * 计算正交相机投影下的 3D 偏移拉伸倍数
+         */
+        function getOrthographicScale(pStartWorld, pEndWorld, dirWorld, targetHeight) {
+            const dx = pEndWorld.x - pStartWorld.x;
+            const dy = pEndWorld.y - pStartWorld.y;
+            const length2D = Math.sqrt(dx * dx + dy * dy);
+
+            if (length2D < 0.0001) return 0;
+
+            const cross2D = Math.abs(dx * dirWorld.y - dy * dirWorld.x);
+            if (cross2D < 0.0001) return targetHeight; // 防止共线时的除零错误
+
+            return (targetHeight * length2D) / cross2D;
+        }
+
+        /**
+         * 快速创建四边形 Mesh
+         */
+        function createQuadMesh(p1, p2, p3, p4, material, renderOrder) {
+            const geometry = new THREE.BufferGeometry();
+            // 两个三角形拼成一个四边形：p1-p2-p3 和 p1-p3-p4
+            const vertices = new Float32Array([
+                p1.x, p1.y, p1.z, p2.x, p2.y, p2.z, p3.x, p3.y, p3.z,
+                p1.x, p1.y, p1.z, p3.x, p3.y, p3.z, p4.x, p4.y, p4.z
+            ]);
+            geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.renderOrder = renderOrder;
+            return mesh;
+        }
+
+        // ==========================================
+        // 2. 核心更新逻辑
+        // ==========================================
+
+        function rebuildStrips() {
+            if (!cube || !object) return;
+            ensureKGroup();
+
+            // --- 【关键】1. 清理旧的 Mesh 并释放内存 ---
+            if (stripS1) { kGroup.remove(stripS1); stripS1.geometry.dispose(); stripS1 = null; }
+            if (stripS2) { kGroup.remove(stripS2); stripS2.geometry.dispose(); stripS2 = null; }
+            if (stripS3) { kGroup.remove(stripS3); stripS3.geometry.dispose(); stripS3 = null; }
+            if (patchMesh) {
+                kGroup.remove(patchMesh);
+                patchMesh.geometry.dispose(); // 必须 dispose，防止内存泄漏！
+                patchMesh = null;
+            }
+
+            // --- 2. 准备旋转矩阵 ---
+            const rx = THREE.MathUtils.degToRad(rotParams.x);
+            const ry = THREE.MathUtils.degToRad(rotParams.y);
+            const rz = THREE.MathUtils.degToRad(rotParams.z);
+            const currentQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz));
+
+            // --- 3. 提取未旋转的 Local 顶点 ---
+            const v1_local = worldVertex(cube, 1, object);
+            const v5_local = worldVertex(cube, 5, object);
+            const v7_local = worldVertex(cube, 7, object);
+            const vMid57_local = v5_local.clone().add(v7_local).multiplyScalar(0.5);
+
+            // --- 新增 S3 的基准顶点 ---
+            const v2_local = worldVertex(cube, 2, object);
+            const t = 0.2; // 20% 的位置
+            // 从 vMid57 出发，向 v1 的方向插值 20%
+            const v3_base_local = vMid57_local.clone().lerp(v1_local, t);
+
+            // --- 4. 模拟 World 顶点 (仅用于计算 2D 比例) ---
+            const v1_world = v1_local.clone().applyQuaternion(currentQuat);
+            const v5_world = v5_local.clone().applyQuaternion(currentQuat);
+            const v7_world = v7_local.clone().applyQuaternion(currentQuat);
+            const vMid57_world = vMid57_local.clone().applyQuaternion(currentQuat);
+
+            // --- 新增 S3 的 World 顶点 ---
+            const v2_world = v2_local.clone().applyQuaternion(currentQuat);
+            const v3_base_world = v3_base_local.clone().applyQuaternion(currentQuat);
+
+            // --- 5. 设定局部偏移方向 ---
+            const dirX_local = new THREE.Vector3(1, 0, 0);
+            // 注意：这里用 -1，确保 S2 的顶边和长方体平齐，往下长肉，不会凸出去
+            const dirY_local = new THREE.Vector3(0, -1, 0);
+
+            // --- 6. 模拟 World 偏移方向 (仅用于计算 2D 比例) ---
+            const dirX_world = dirX_local.clone().applyQuaternion(currentQuat).normalize();
+            const dirY_world = dirY_local.clone().applyQuaternion(currentQuat).normalize();
+
+            // --- 7. 调用数学魔法，计算精确的局部缩放倍数 ---
+            const W = boxParams.kStroke;
+            let scaleS1 = getOrthographicScale(v5_world, v7_world, dirX_world, W);
+            let scaleS2 = getOrthographicScale(v1_world, vMid57_world, dirY_world, W);
+            let scaleS3 = getOrthographicScale(v2_world, v3_base_world, dirY_world, W);
+
+            // ==========================================
+            // 🚀 【核心防爆机制】自动追踪与极限值拦截
+            // ==========================================
+            // 🚀 定义三个独立的倍数（根据你的需求调整数值）
+            const MULTIPLIER_S1 = 10;
+            const MULTIPLIER_S2 = 2;
+            const MULTIPLIER_S3 = 2; // 比如 S3 需要长补丁，允许它稍微大一点
+
+            function applyAntiExplosion(scale, multiplier) {
+                const limit = W * multiplier;
+
+                // 如果 scale 爆炸（无效或超过个体上限）
+                if (!Number.isFinite(scale) || Math.abs(scale) > limit) {
+                    return limit; // 触发防爆，直接锁定在该个体的最大上限
+                }
+                return Math.abs(scale); // 安全区间
+            }
+
+            // 🚀 分别传入各自的倍数进行过滤
+            scaleS1 = applyAntiExplosion(scaleS1, MULTIPLIER_S1);
+            scaleS2 = applyAntiExplosion(scaleS2, MULTIPLIER_S2);
+            scaleS3 = applyAntiExplosion(scaleS3, MULTIPLIER_S3);
+
+            const maxSafeScale = W * 3;
+            // ==========================================
+
+            // --- 8. 得到最终纯粹的 Local 偏移量 ---
+            const offsetS1_local = dirX_local.clone().multiplyScalar(scaleS1);
+            const offsetS2_local = dirY_local.clone().multiplyScalar(scaleS2);
+            const offsetS3_local = dirY_local.clone().multiplyScalar(scaleS3);
+            // --- 9. 组装最终顶点 ---
+            const s1_p1 = v5_local;
+            const s1_p2 = v5_local.clone().add(offsetS1_local);
+            const s1_p3 = v7_local.clone().add(offsetS1_local);
+            const s1_p4 = v7_local;
+
+            const s2_p1 = v1_local;
+            const s2_p2 = v1_local.clone().add(offsetS2_local);
+            const s2_p3 = vMid57_local.clone().add(offsetS2_local);
+            const s2_p4 = vMid57_local;
+
+            const s3_p1 = v2_local;
+            const s3_p2 = v2_local.clone().sub(offsetS3_local);
+            let s3_p3 = v3_base_local;
+            let s3_p4 = v3_base_local.clone().add(offsetS3_local);
+
+            // --- 10. 创建新 Mesh 并加入组中 ---
+            // 假设你有通用的材质 matWhiteDS 或者测试用的 testMaterial
+            stripS1 = createQuadMesh(s1_p1, s1_p2, s1_p3, s1_p4, matWhiteDS, 2);
+            stripS2 = createQuadMesh(s2_p1, s2_p2, s2_p3, s2_p4, matWhiteDS, 1);
+            stripS3 = createQuadMesh(s3_p1, s3_p2, s3_p3, s3_p4, matWhiteDS, 0);
+
+            addOutline(stripS1);
+            addOutline(stripS2);
+            addOutline(stripS3);
+
+            kGroup.add(stripS1);
+            kGroup.add(stripS2);
+            kGroup.add(stripS3);
+
+            // --- 【补丁】3. 实用主义：手动计算三角形的端点 2 ---
+            if (
+                (rotParams.y < 30 || rotParams.y > 60) &&
+                (rotParams.x < 60 && rotParams.x > -40)
+            ) {
+
+                // 1. 获取摄像机当前的观察方向
+                const viewDir = new THREE.Vector3();
+                camera.getWorldDirection(viewDir);
+
+                // 2. 核心魔法：分离并提取 "Rot X" 因子
+                // dirY_world 是你在上面第 6 步算好的局部 Y 轴的世界朝向
+                // dotY 越大，说明绕 X 轴转得越厉害（正从顶部/底部看）
+                const dotY = Math.abs(viewDir.dot(dirY_world));
+
+                // 3. 计算 X 轴旋转压制系数 (Dampening)
+                // 当 dotY = 0 (没绕X转) 时，dampeningX = 1 (火力全开，允许长补丁)
+                // 当 dotY = 1 (绕X转了90度) 时，dampeningX = 0 (绝对压制，打回原形)
+                // (如果你觉得线性压制不够狠，可以改成: 1.0 - Math.pow(dotY, 2))
+                const dampeningX = Math.max(0, 1.0 - dotY);
+
+                // 4. 定义补丁长度的极值区间
+                const minPatchLen = 0;
+                const maxPatchLen = -0.7; // 需要多长，这里自己定
+
+                // 5. 计算由 scaleS3 带来的基础膨胀进度 t (范围 0 到 1)
+                let t = (scaleS3 - W) / (maxSafeScale - W);
+                t = Math.max(0, Math.min(1, t));
+
+                // 6. 【终极制衡】用 Rot X 系数强行压制膨胀进度！
+                // 只要你敢绕 X 轴转，管你 scaleS3 有多大，t 都会被强制缩小甚至归零
+                const final_t = t * dampeningX;
+
+                // 7. 根据最终压制后的进度计算补丁长度
+                const patchExtendLength = minPatchLen + final_t * (maxPatchLen - minPatchLen);
+
+                // --- 继续执行原本的补丁顶点计算 ---
+                const edgeDirection = s3_p1.clone().sub(s3_p4).normalize();
+                const vManualPoint = s3_p4.clone().add(edgeDirection.multiplyScalar(patchExtendLength));
+
+                // --- 【补丁】4. 创建补丁三角形 Mesh ---
+                // 继续用品红色测试，方便你观察大小
+                const matPatch = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+
+                // 组装三角形的三个端点，顺序：vManualPoint, s3_p4, s3_p3
+                const vertices_Float32 = new Float32Array([
+                    vManualPoint.x, vManualPoint.y, vManualPoint.z,
+                    s3_p4.x, s3_p4.y, s3_p4.z,
+                    s3_p3.x, s3_p3.y, s3_p3.z,
+                ]);
+
+                const geometry_Patch = new THREE.BufferGeometry();
+                geometry_Patch.setAttribute('position', new THREE.BufferAttribute(vertices_Float32, 3));
+
+                patchMesh = new THREE.Mesh(geometry_Patch, matPatch);
+                patchMesh.renderOrder = 0; // 确保补丁渲染在最上面
+                kGroup.add(patchMesh);
+            }
+        }
+
+        function addOutline(strip, alwaysOnTop = true) {
+            const edges = new THREE.EdgesGeometry(strip.geometry, 1); // 1° threshold
+
+            // Make the outline always visible on top:
+            if (alwaysOnTop) {
+                matLine.depthTest = false;   // ignore depth test
+                matLine.depthWrite = false;   // don't write to depth
+            }
+
+            const lines = new THREE.LineSegments(edges, matLine);
+            lines.renderOrder = (strip.renderOrder || 0) + 10; // draw after the fill
+            strip.add(lines); // parent so it follows transforms
+            return lines;
+        }
+
+        //====================strip functions end====================
+
+        function updateGuiRecursive(guiNode) {
+            // 1. 更新当前层级的控制器
+            guiNode.controllers.forEach(c => c.updateDisplay());
+
+            // 2. 递归更新所有子文件夹
+            guiNode.folders.forEach(f => updateGuiRecursive(f));
+        }
+
+        function init() {
+
+            perspCamera = new THREE.PerspectiveCamera(33, window.innerWidth / window.innerHeight, 0.1, 100);
+            perspCamera.position.z = 10;
+
+            // 2. Initialize Ortho Camera immediately
+            orthoCamera = makeMatchingOrtho(perspCamera);
+
+            // 3. Set the ACTIVE camera to ortho
+            camera = orthoCamera;
+            // camera = new THREE.PerspectiveCamera(33, window.innerWidth / window.innerHeight, 0.1, 100);
+            // camera.position.z = 10;
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(colorParams.bg);
+
+            renderer = new SVGRenderer();
+            //renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.listenToKeyEvents(window);
+
+            // 3. 在 OrbitControls 变化时更新 rotParams
+            controls.addEventListener('change', () => {
+                // getAzimuthalAngle() 返回 Y 轴方向的旋转 (弧度)
+                // getPolarAngle() 返回 X 轴方向的旋转 (弧度)
+
+                // 如果你需要转成角度 (Degrees) 来处理你的判断逻辑：
+                rotParams.y = -THREE.MathUtils.radToDeg(controls.getAzimuthalAngle());
+                rotParams.x = -THREE.MathUtils.radToDeg(controls.getPolarAngle() - Math.PI / 2);
+                rotParams.z = -THREE.MathUtils.radToDeg(camera.rotation.z);
+                // 注：PolarAngle 是从上向下计算的，所以通常要减去 PI/2 才能和直觉上的 X 旋转对齐
+                updateGuiRecursive(gui);
+                rebuildStrips();
+            });
+
+            controls.enableDamping = true; // an animation loop is required when either damping or auto-rotation are enabled
+            controls.dampingFactor = 0.05;
+            controls.minDistance = 5;
+            controls.maxDistance = 50;
+            controls.screenSpacePanning = false;
+
+            //box
+            cube = new THREE.BoxGeometry(baseDims.w, baseDims.h, baseDims.d);
+            object = new THREE.Mesh(cube, new THREE.MeshBasicMaterial({ color: 0xff0000 }));
+
+            box = new THREE.BoxHelper(object, colorParams.cStroke);
+            box.matrixAutoUpdate = true;
+            scene.add(box);
+
+            rebuildStrips();
+            applyRotation();
+
+            window.addEventListener('resize', onWindowResize);
+
+        }
+
+        //====================camera functions start====================
+        // keep your existing perspective camera as the "master"
+        // const perspCamera = camera;
+
+        // make an ortho camera that matches what the perspective camera sees at the controls target
+        function makeMatchingOrtho(pcam) {
+            const aspect = window.innerWidth / window.innerHeight;
+            const d = 10; // Default distance if controls aren't ready yet
+            const halfH = Math.tan(THREE.MathUtils.degToRad(pcam.fov * 0.5)) * d;
+            const halfW = halfH * aspect;
+
+            const ocam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, pcam.near, pcam.far);
+            ocam.position.copy(pcam.position);
+            ocam.updateProjectionMatrix();
+            return ocam;
+        }
+
+        // keep the ortho frustum in sync with current perspective settings/pose
+        function syncOrthoFrustum() {
+            const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
+            const d = perspCamera.position.distanceTo(controls.target);
+            const halfH = Math.tan(THREE.MathUtils.degToRad(perspCamera.fov * 0.5)) * d;
+            const halfW = halfH * aspect;
+            orthoCamera.left = -halfW;
+            orthoCamera.right = halfW;
+            orthoCamera.top = halfH;
+            orthoCamera.bottom = -halfH;
+            // align pose when switching back/forth
+            if (camera === perspCamera) {
+                orthoCamera.position.copy(perspCamera.position);
+                orthoCamera.quaternion.copy(perspCamera.quaternion);
+            }
+            orthoCamera.near = perspCamera.near;
+            orthoCamera.far = perspCamera.far;
+            controls.minZoom = 1;
+            controls.maxZoom = 5.0;
+            orthoCamera.updateProjectionMatrix();
+        }
+
+        // update when orbiting/zooming
+        controls.addEventListener('change', () => {
+            if (camera === perspCamera) {
+                syncOrthoFrustum();
+            } else {
+                // keep persp pose following ortho so switching back is seamless
+                perspCamera.position.copy(orthoCamera.position);
+                perspCamera.quaternion.copy(orthoCamera.quaternion);
+                syncOrthoFrustum();
+            }
+        });
+
+        //====================camera functions end====================
+
+        //====================render functions start====================
+
+        let currentRenderer = 'SVG (SVG Output)'; // or 'SVG'
+
+        function createRenderer(kind) {
+            if (kind === 'SVG (SVG Output)') {
+                const r = new SVGRenderer();
+                r.setSize(window.innerWidth, window.innerHeight);
+                return r;
+            } else {
+                const r = new THREE.WebGLRenderer({ antialias: true });
+                r.setPixelRatio(window.devicePixelRatio);
+                r.setSize(window.innerWidth, window.innerHeight);
+                return r;
+            }
+        }
+
+        function recreateControls() {
+            // stash previous options (if you care to preserve them)
+            const opts = {
+                enableDamping: controls?.enableDamping ?? true,
+                dampingFactor: controls?.dampingFactor ?? 0.05,
+                screenSpacePanning: controls?.screenSpacePanning ?? false,
+                target: controls?.target?.clone() ?? new THREE.Vector3()
+            };
+            controls?.dispose();
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.listenToKeyEvents(window);
+            controls.enableDamping = opts.enableDamping;
+            controls.dampingFactor = opts.dampingFactor;
+            controls.screenSpacePanning = opts.screenSpacePanning;
+            controls.target.copy(opts.target);
+            controls.update();
+        }
+
+        function switchRenderer(kind) {
+            if (kind === currentRenderer) return;
+
+            // remove old canvas/svg
+            if (renderer) {
+                renderer.domElement?.parentNode?.removeChild(renderer.domElement);
+                // WebGLRenderer has dispose; SVGRenderer does not
+                if (renderer.dispose) renderer.dispose();
+            }
+
+            renderer = createRenderer(kind);
+            container.appendChild(renderer.domElement);
+            recreateControls();
+
+            currentRenderer = kind;
+            updateExportButtons(renderer);
+        }
+
+        //====================render functions end====================
+
+        //====================export functions start====================
+
+        const recordActions = {
+            startRecord() {
+                updateButtonsName("exportVideoCtrl");
+                startCanvasRecording(renderer, {
+                    seconds: recParams.seconds,
+                    fps: recParams.fps,
+                    filename: recParams.filename
+                });
+            }
+        };
+
+        //====================export functions end====================
+
+        //====================animation functions start====================
+
+        const animActions = {
+            startAnimation() {
+                resetAllRotations(0);
+                // Commit any active GUI text inputs
+                if (document.activeElement && document.activeElement.blur) {
+                    document.activeElement.blur();
+                }
+
+                resetAnimStroke();
+                resetAnimBoxWidth();
+                resetAnimBoxHeight();
+            }
+        };
+
+        const comboActions = {
+            startAnimRecord() {
+                updateButtonsName("exportVideoAnimCtrl");
+                animActions.startAnimation();
+                recordActions.startRecord();
+            }
+        };
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = clock.getDelta();
+
+            if (rotParams.enabled) {
+                rotPlayhead += dt;
+
+                const TWO_PI = Math.PI * 2;
+                const omega = (rotParams.period > 1e-4) ? (TWO_PI / rotParams.period) : 0;
+
+                let i = 0;
+                scene.traverse((child) => {
+                    if (child.parent !== scene) return; // top-level only
+                    child.rotation.y = i + rotPlayhead * omega;
+                });
+            }
+
+            if (strokeParams.auto && strokeParams.period > 1e-4) {
+                if (strokeParams.delayStart > 0) {
+                    strokeParams.delayStart = Math.max(0, strokeParams.delayStart - dt);
+                    setStroke(strokeParams.min);
+                    controls.update();
+                    render();
+                    return;
+                }
+
+                const cycle = strokeParams.period + strokeParams.delayPause; // motion first, then pause
+                strokeCycleTime = (strokeCycleTime + dt) % cycle;
+
+                if (strokeCycleTime < strokeParams.period) {
+                    const u = strokeCycleTime / strokeParams.period;          // 0..1
+                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));          // ping–pong 0..1..0
+                    const s = THREE.MathUtils.lerp(strokeParams.min, strokeParams.max, t);
+                    setStroke(s);
+                } else {
+                    // setStroke(strokeParams.min);
+                }
+            }
+
+            if (widthParams.auto && widthParams.period > 1e-4) {
+                if (widthParams.delayStart > 0) {
+                    widthParams.delayStart = Math.max(0, widthParams.delayStart - dt);
+                    setBoxWidth(widthParams.min);
+                    controls.update();
+                    render();
+                    return;
+                }
+
+                const cycle = widthParams.period + widthParams.delayPause;
+                widthCycleTime = (widthCycleTime + dt) % cycle;
+
+                if (widthCycleTime < widthParams.period) {
+                    const u = widthCycleTime / widthParams.period;
+                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));
+                    const w = THREE.MathUtils.lerp(widthParams.min, widthParams.max, t);
+                    if (Math.abs(w - boxParams.width) > 1e-6) setBoxWidth(w);
+                } else {
+                    const w = widthParams.min;
+                    if (Math.abs(w - boxParams.width) > 1e-6) setBoxWidth(w);
+                }
+            }
+
+            if (heightParams.auto && heightParams.period > 1e-4) {
+
+                if (heightParams.delayStart > 0) {
+                    heightParams.delayStart = Math.max(0, heightParams.delayStart - dt);
+                    setBoxHeight(heightParams.min);
+                    controls.update();
+                    render();
+                    return;
+                }
+
+                // motion first, then pause
+                const cycle = heightParams.period + heightParams.delayPause;
+                heightCycleTime = (heightCycleTime + dt) % cycle;
+
+                if (heightCycleTime < heightParams.period) {
+                    // Animated segment (0..period)
+                    const u = heightCycleTime / heightParams.period;       // 0..1
+                    const t = 0.5 * (1 - Math.cos(2 * Math.PI * u));      // ping–pong 0..1..0
+                    const h = THREE.MathUtils.lerp(heightParams.min, heightParams.max, t);
+                    if (Math.abs(h - boxParams.height) > 1e-6) setBoxHeight(h);
+                } else {
+                    // Pause segment → hold at min (or do nothing if you prefer)
+                    const h = heightParams.min;
+                    if (Math.abs(h - boxParams.height) > 1e-6) setBoxHeight(h);
+                }
+            }
+
+            controls.update();
+            render();
+        }
+
+        function resetAnimStroke() {
+            strokePlayhead = 0;
+            strokeCycleTime = 0;
+        }
+
+        function resetAnimBoxWidth() {
+            widthPlayhead = 0;
+            widthCycleTime = 0;
+        }
+
+        function resetAnimBoxHeight() {
+            heightPlayhead = 0;
+            heightCycleTime = 0;
+        }
+
+        function resetAllRotations(angle = 0) {
+            let i = 0;
+            scene.traverse((child) => {
+                if (child.parent !== scene) return;
+
+                // ⬇️ 关键修改：只修改 Y 轴，保留 X 和 Z
+                child.rotation.y = angle;
+
+                i++;
+            });
+            rotPlayhead = 0; // optional: reset phase so next start begins clean
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        window.addEventListener('resize', () => {
+            const w = window.innerWidth, h = window.innerHeight;
+            renderer.setSize(w, h);
+            perspCamera.aspect = w / h;
+            perspCamera.updateProjectionMatrix();
+            syncOrthoFrustum();
+        });
+
+        function render() {
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        //====================animation functions end====================
+
+        //====================GUI functions start====================
+
+        import {
+            getGUI,
+            addRendererUI,
+            addCameraUI,
+            addBoxHelperUI,
+            addColorUI,
+            addStaticUI,
+            addAnimationUI,
+            addExportUI,
+        } from './gui.js';
+
+        const gui = getGUI();
+
+        addRendererUI({ switchRenderer });
+
+        addCameraUI({
+            getCamera: () => camera,
+            setCamera: (cam) => { camera = cam; },
+            perspCamera, orthoCamera, controls, syncOrthoFrustum
+        });
+
+        addBoxHelperUI({
+            box,
+        });
+
+        addColorUI({
+            scene,
+            box,
+            colorParams,
+            setStrokeColor,
+        });
+
+        addStaticUI({
+            rebuildStrips,
+            boxParams,
+            applyBoxSize,
+            rotParams,
+            applyRotation,
+        });
+
+        addAnimationUI({
+            rotParams,
+            strokeParams,
+            resetAnimStroke,
+            widthParams,
+            resetAnimBoxWidth,
+            heightParams,
+            resetAnimBoxHeight,
+            animActions
+        });
+
+        const { updateExportButtons, updateButtonsName } = addExportUI({
+            svgParams,
+            recParams,
+            recordActions,
+            comboActions
+        });
+
+        updateExportButtons(renderer);
+
+
+        var btn = document.getElementById('exportGLB');
+
+        btn.onclick = download;
+
+        function download() {
+            const exporter = new GLTFExporter();
+            exporter.parse(
+                scene,
+                function (result) {
+                    saveArrayBuffer(result, 'scene.glb');
+                },
+                { binary: true }
+            );
+        }
+
+        function saveArrayBuffer(buffer, filename) {
+            save(new Blob([buffer], { type: 'application/octet-stream' }), filename);
+        }
+
+        const link = document.createElement('a');
+        link.style.display = 'none';
+        document.body.appendChild(link); // Firefox workaround, see #6594
+
+        function save(blob, filename) {
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            link.click();
+
+            // URL.revokeObjectURL( url ); breaks Firefox...
+        }
+
+        //====================GUI functions end====================
+    </script>
+</body>
+
+</html>

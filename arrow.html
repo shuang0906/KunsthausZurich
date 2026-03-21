@@ -278,17 +278,18 @@
             const v2 = worldVertex(geo, 2, mesh);
             const v3 = worldVertex(geo, 3, mesh);
             const v4 = worldVertex(geo, 4, mesh);
+            const v5 = worldVertex(geo, 5, mesh);
             const v6 = worldVertex(geo, 6, mesh);
             const v7 = worldVertex(geo, 7, mesh);
 
-            const vMid57 = v4.clone().add(v6).multiplyScalar(0.5);
+            const vMid57 = v5.clone().add(v7).multiplyScalar(0.5);
             const vS3End = vMid57.clone().lerp(v1, 0.2);
 
             // 用 matrixWorld 的基向量保留 stationary 当前 scale/rotation 的结果
             const axisXWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 0);
             const axisYWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 1);
 
-            // 把 samestroke-cal 的“动态算粗细”逻辑接到 stationary 里
+            // 箭头方向A
             // const scaleS1 = getOrthographicScale(v4, v6, axisXWorld, absoluteStroke);
             // const scaleS2 = getOrthographicScale(v1, v4, axisYWorld, absoluteStroke);
             // const scaleS3 = getOrthographicScale(v2, v4, axisYWorld, absoluteStroke);
@@ -301,17 +302,31 @@
             // const s2 = makeStrip(v1, v4, offsetS2, matWhiteDS);
             // const s3 = makeCenteredStrip(v2, v4, offsetS3, matWhiteDS);;
 
-            const scaleS1 = getOrthographicScale(v4, v6, axisXWorld, absoluteStroke);
-            const scaleS2 = getOrthographicScale(v6, v7, axisXWorld, absoluteStroke);
-            const scaleS3 = getOrthographicScale(v6, v3, axisYWorld, absoluteStroke);
+            // 箭头方向B
+            // const scaleS1 = getOrthographicScale(v4, v6, axisXWorld, absoluteStroke);
+            // const scaleS2 = getOrthographicScale(v6, v7, axisXWorld, absoluteStroke);
+            // const scaleS3 = getOrthographicScale(v6, v3, axisYWorld, absoluteStroke);
+
+            // const offsetS1 = axisXWorld.clone().multiplyScalar(scaleS1);
+            // const offsetS2 = axisXWorld.clone().multiplyScalar(scaleS2);
+            // const offsetS3 = axisYWorld.clone().multiplyScalar(scaleS3);
+
+            // const s1 = makeStrip(v4, v6, offsetS1, matWhiteDS);
+            // const s2 = makeStrip(v6, v7, offsetS2, matWhiteDS);
+            // const s3 = makeStrip(v6, v3, offsetS3, matWhiteDS);
+            
+            const scaleS1 = getOrthographicScale(v5, v7, axisXWorld, absoluteStroke);
+            const scaleS2 = getOrthographicScale(v1, vMid57, axisYWorld, absoluteStroke);
+            const scaleS3 = getOrthographicScale(v2, vS3End, axisYWorld, absoluteStroke);
 
             const offsetS1 = axisXWorld.clone().multiplyScalar(scaleS1);
-            const offsetS2 = axisXWorld.clone().multiplyScalar(scaleS2);
+            const offsetS2 = axisYWorld.clone().multiplyScalar(-scaleS2);
             const offsetS3 = axisYWorld.clone().multiplyScalar(scaleS3);
 
-            const s1 = makeStrip(v4, v6, offsetS1, matWhiteDS);
-            const s2 = makeStrip(v6, v7, offsetS2, matWhiteDS);
-            const s3 = makeStrip(v6, v3, offsetS3, matWhiteDS);;            
+            const s1 = makeStrip(v5, v7, offsetS1, matWhiteDS);
+            const s2 = makeStrip(v1, vMid57, offsetS2, matWhiteDS);
+            const s3 = makeCenteredStrip(v2, vS3End, offsetS3, matWhiteDS); 
+            
             kGroup.add(s1, s2, s3);
         }
 

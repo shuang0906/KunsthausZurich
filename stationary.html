@@ -37,8 +37,6 @@
         }
 
         #rendererCanvas svg {
-            max-width: 90vw;
-            max-height: 90vh;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
             background-color: #fff;
         }
@@ -85,6 +83,21 @@
         button:hover {
             background: #555;
         }
+
+        .vertex-label {
+            position: absolute;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: bold;
+            pointer-events: none;
+            user-select: none;
+            white-space: nowrap;
+            transform: translate(-50%, -50%);
+        }
+        }
     </style>
 </head>
 
@@ -104,8 +117,12 @@
         </div>
         <div class="input-group">
             <label>Yaw (Y 轴)</label>
-            <input type="number" id="yawInput" value="20">
+            <input type="number" id="yawInput" value="25">
         </div>
+<div class="input-group">
+    <label>Roll (Z 轴)</label>
+    <input type="number" id="rollInput" value="0">
+</div>
         <button id="updateBtn">生成/更新</button>
         <button id="saveBtn">保存 SVG</button>
     </div>
@@ -126,8 +143,9 @@
     <script type="module">
         import * as THREE from 'three';
         import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
-        let renderer, scene, camera, mesh, kGroup, geo;
+        let renderer, scene, camera, mesh, kGroup, geo, css2dRenderer, labelGroup;
         const frustumHeight = 8;
 
         // 记录当前的画布高度，用于像素换算
@@ -145,6 +163,14 @@
 
             renderer = new SVGRenderer();
             container.appendChild(renderer.domElement);
+
+            css2dRenderer = new CSS2DRenderer();
+            css2dRenderer.domElement.style.position = 'absolute';
+            css2dRenderer.domElement.style.top = '50%';
+            css2dRenderer.domElement.style.left = '50%';
+            css2dRenderer.domElement.style.transform = 'translate(-50%, -50%)';
+            css2dRenderer.domElement.style.pointerEvents = 'none'; // 防止遮挡 SVG 交互
+            container.appendChild(css2dRenderer.domElement);
 
             scene = new THREE.Scene();
             camera = new THREE.OrthographicCamera(-4, 4, 4, -4, -100, 100);
@@ -167,21 +193,24 @@
             const ratioStr = document.getElementById('ratioInput').value;
             const pitch = parseFloat(document.getElementById('pitchInput').value) || 0;
             const yaw = parseFloat(document.getElementById('yawInput').value) || 0;
+            const roll = parseFloat(document.getElementById('rollInput').value) || 0;
 
             let [rw, rh] = ratioStr.includes(':') ? ratioStr.split(':').map(Number) : [parseFloat(ratioStr), 1];
             if (!rw || !rh) { rw = 400; rh = 300; }
 
-            const targetW = rw * 3;
-            const targetH = rh * 3;
-            const t = targetW / targetH;
-
-            // 更新全局变量，用于 rebuildStrips 里的像素换算
-            currentTargetH = targetH;
-
-            // 1. 更新渲染器尺寸和相机比例
-            renderer.setSize(targetW, targetH);
+            // 原本这里有 * 3，现在彻底去掉，回归绝对像素
+            const targetW = rw;
+            const targetH = rh;
             const aspect = targetW / targetH;
 
+            currentTargetH = targetH;
+
+            // 1. 同步更新两个渲染器的尺寸为输入的绝对像素
+            renderer.setSize(targetW, targetH);
+            css2dRenderer.setSize(targetW, targetH);
+
+            const t = aspect;
+            // 更新相机的视锥体比例
             camera.left = -frustumHeight * aspect / 2;
             camera.right = frustumHeight * aspect / 2;
             camera.top = frustumHeight / 2;
@@ -189,7 +218,7 @@
             camera.updateProjectionMatrix();
 
             // 2. 设置旋转
-            mesh.rotation.set(deg2rad(pitch), deg2rad(yaw), 0, 'XYZ');
+            mesh.rotation.set(deg2rad(pitch), deg2rad(yaw), deg2rad(roll), 'XYZ');
             mesh.updateMatrixWorld(true);
 
             // 3. 求解适配当前比例的缩放
@@ -208,7 +237,11 @@
             // 5. 重建笔触
             rebuildStrips();
 
+            // 6. 更新顶点标签
+            updateVertexLabels();
+
             renderer.render(scene, camera);
+            css2dRenderer.render(scene, camera);
         }
 
 
@@ -245,6 +278,7 @@
             const v2 = worldVertex(geo, 2, mesh);
             const v5 = worldVertex(geo, 5, mesh);
             const v7 = worldVertex(geo, 7, mesh);
+
             const vMid57 = v5.clone().add(v7).multiplyScalar(0.5);
             const vS3End = vMid57.clone().lerp(v1, 0.2);
 
@@ -252,7 +286,6 @@
             const axisXWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 0);
             const axisYWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 1);
 
-            // 把 samestroke-cal 的“动态算粗细”逻辑接到 stationary 里
             const scaleS1 = getOrthographicScale(v5, v7, axisXWorld, absoluteStroke);
             const scaleS2 = getOrthographicScale(v1, vMid57, axisYWorld, absoluteStroke);
             const scaleS3 = getOrthographicScale(v2, vS3End, axisYWorld, absoluteStroke);
@@ -263,11 +296,11 @@
 
             const s1 = makeStrip(v5, v7, offsetS1, matWhiteDS);
             const s2 = makeStrip(v1, vMid57, offsetS2, matWhiteDS);
-            const s3 = makeCenteredStrip(v2, vS3End, offsetS3, matWhiteDS);
-
+            const s3 = makeCenteredStrip(v2, vS3End, offsetS3, matWhiteDS); 
+            
             kGroup.add(s1, s2, s3);
         }
-        
+
         function saveSVG() {
             const svgElement = renderer.domElement;
             const serializer = new XMLSerializer();
@@ -282,12 +315,15 @@
             const link = document.createElement("a");
             link.href = url;
 
-            // 获取当前输入的比例，并将冒号替换为 x 以符合操作系统的文件名规范
+            // 获取当前输入的参数，并将冒号替换为 x 以符合操作系统的文件名规范
             let ratioStr = document.getElementById('ratioInput').value;
             let safeRatioName = ratioStr.replace(/:/g, 'x');
+            let stroke = document.getElementById('strokeInput').value;
+            let pitch = document.getElementById('pitchInput').value;
+            let yaw = document.getElementById('yawInput').value;
 
             // 动态设置文件名
-            link.download = `logo-${safeRatioName}.svg`;
+            link.download = `logo-${safeRatioName}-s${stroke}-p${pitch}-y${yaw}.svg`;
 
             document.body.appendChild(link);
             link.click();
@@ -302,6 +338,31 @@
             const zoomW = frustumW / size.x;
             const zoomH = frustumHeight / size.y;
             return Math.min(zoomW, zoomH) * 0.9;
+        }
+
+        function updateVertexLabels() {
+            if (!labelGroup) {
+                labelGroup = new THREE.Group();
+                scene.add(labelGroup);
+            }
+
+            // 清空旧标签
+            while (labelGroup.children.length > 0) {
+                labelGroup.remove(labelGroup.children[0]);
+            }
+
+            // 为立方体的8个顶点添加标签
+            for (let i = 0; i < 8; i++) {
+                const vertexPos = worldVertex(geo, i, mesh);
+
+                const div = document.createElement('div');
+                div.className = 'vertex-label';
+                div.textContent = i;
+
+                const label = new CSS2DObject(div);
+                label.position.copy(vertexPos);
+                labelGroup.add(label);
+            }
         }
 
         function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }

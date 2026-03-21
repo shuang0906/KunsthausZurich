@@ -26,6 +26,18 @@
             width: 100%;
             height: 100%;
             z-index: 1;
+
+        }
+
+        /* 覆盖在每个图片层上方的独立 3D 画布 */
+        .layer-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            /* 穿透点击 */
         }
 
         .art-frame {
@@ -33,13 +45,24 @@
             top: 0;
             left: 0;
             background-color: #fff;
-            box-shadow: 10px 10px 30px rgba(0, 0, 0, 0.1);
+            box-shadow: 10px 10px 20px rgba(0, 0, 0, 0.5);
             transform-origin: top left;
+            /* 👇 恢复原样，把 overflow: hidden 删掉！让文字能露出来 */
             display: flex;
             justify-content: center;
             align-items: center;
-            /* overflow: hidden; */
             box-sizing: border-box;
+        }
+
+        /* 🌟 新增：专门用来“关住”图片的裁切层 */
+        .img-wrapper {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            /* 🌟 溢出隐藏放在这里！只会裁切内部的图片 */
         }
 
         .art-frame img {
@@ -48,16 +71,21 @@
             object-fit: cover;
             opacity: 0.9;
             mix-blend-mode: multiply;
-            /* transition: opacity 0.5s ease; */
+            /* 🌟 微微放大，把黑边挤到 img-wrapper 外面去 */
+            transform: scale(1.1);
+            transform-origin: center;
         }
 
         .frame-info {
             position: absolute;
-            top: 100%;
+            top: calc(100% + 6px);
             left: 0px;
             font-family: 'Fragment Mono', monospace;
             font-size: 10px;
             color: #000;
+
+            /* 🚀 新增：不要加 transition，确保它瞬间切换，不参与拖泥带水的动画 */
+            transition: none;
         }
 
         /* 2. WebGL 渲染层 */
@@ -97,7 +125,6 @@
 <body>
 
     <div id="dom-layer"></div>
-    <canvas id="rendererCanvas"></canvas>
 
     <div class="bottom-text bottom-left-text">
         FLUID 3D GRID & AUTONOMOUS SCALING<br>
@@ -148,18 +175,16 @@
         const items = [];
         let scene, camera, renderer, boxGeo;
 
-        function init() {
-            if (sequence.length === 0) {
-                console.warn("⚠️ 找不到 window.museumDB，检查 /assets/museumDB.js 路径！");
-            }
 
-            const canvas = document.getElementById('rendererCanvas');
-            renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+        function init() {
+            if (sequence.length === 0) console.warn("⚠️ 找不到 window.museumDB");
+
+            // 🌟 1. 创建“后台画板”，注意这里不把它加到 document.body 里！
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
 
             scene = new THREE.Scene();
-
             const aspect = window.innerWidth / window.innerHeight;
             camera = new THREE.OrthographicCamera(
                 -frustumHeight * aspect / 2, frustumHeight * aspect / 2,
@@ -168,55 +193,93 @@
 
             boxGeo = new THREE.BoxGeometry(2, 2, 2);
             const matWireframe = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
-
             const domLayer = document.getElementById('dom-layer');
 
             blocksConfig.forEach((conf, index) => {
                 const mesh = new THREE.Mesh(boxGeo, matWireframe);
                 scene.add(mesh);
-
                 const helper = new THREE.BoxHelper(mesh, 0x000000);
                 mesh.add(helper);
 
                 const stripsGroup = new THREE.Group();
                 scene.add(stripsGroup);
 
+                // --- DOM 图片层 ---
                 const domEl = document.createElement('div');
                 domEl.className = 'art-frame';
-                domEl.style.zIndex = conf.zIndex;
+
+                // 🌟 新增：创建一个专门包裹 img 的裁切层
+                const imgWrapper = document.createElement('div');
+                imgWrapper.className = 'img-wrapper';
 
                 const imgEl = document.createElement('img');
-                imgEl.src = '';
-
                 const labelEl = document.createElement('div');
                 labelEl.className = 'frame-info';
 
-                domEl.appendChild(imgEl);
+                // 🌟 改变嵌套关系：
+                // 1. 先把图片放进裁切层
+                imgWrapper.appendChild(imgEl);
+                // 2. 把裁切层放进主画框
+                domEl.appendChild(imgWrapper);
+                // 3. 把文字标签放进主画框（和裁切层是平级兄弟，所以不会被裁掉！）
                 domEl.appendChild(labelEl);
+
                 domLayer.appendChild(domEl);
 
+                // 🌟 2. 为每个方块创建一张专属的 2D Canvas，和图片放在同一个父级下
+                const viewCanvas = document.createElement('canvas');
+                viewCanvas.className = 'layer-canvas';
+                viewCanvas.width = window.innerWidth * window.devicePixelRatio;
+                viewCanvas.height = window.innerHeight * window.devicePixelRatio;
+                domLayer.appendChild(viewCanvas);
+                const ctx = viewCanvas.getContext('2d');
+
+                const phaseX = Math.random() > 0.5 ? 0 : (Math.PI / 2);
+
                 const data = {
-                    conf: conf, mesh: mesh, stripsGroup: stripsGroup, dom: domEl, img: imgEl, label: labelEl,
+                    conf: conf, mesh: mesh, stripsGroup: stripsGroup,
+                    dom: domEl, img: imgEl, label: labelEl,
+                    canvas: viewCanvas, ctx: ctx, // 存入专属画板
+
+                    baseZ: (conf.zIndex - 5) * 5 + (Math.random() - 0.5) * 10,
+                    offsetZ: Math.random() * Math.PI * 2,
+
                     currentRatio: 1, lastImageName: '',
                     offsetX: Math.random() * Math.PI * 2, offsetY: Math.random() * Math.PI * 2,
                     scaleOffX: Math.random() * Math.PI * 2, scaleOffY: Math.random() * Math.PI * 2,
-                    rotOffX: Math.random() * Math.PI * 2, rotOffY: Math.random() * Math.PI * 2,
-                    scaleBase: index === 4 ? 4 : (Math.random() * 1.5 + 1),
+                    rotOffX: phaseX, rotOffY: Math.random() > 0.5 ? 0 : (Math.PI / 2),
+                    scaleBase: index === 4 ? 4 : (Math.random() * 1.5 + 2),
                     speedScale: Math.random() * 0.5 + 0.5
                 };
                 items.push(data);
             });
 
             window.addEventListener('resize', onWindowResize);
-
             requestAnimationFrame(animate);
-            startMatchingTimer(800); // 间隔时间，原版是200ms，这里设为1000ms避免8个框同时闪烁过于刺眼，可根据喜好调
+            // startMatchingTimer(1000);
         }
 
-        // 🏃‍♂️ 核心渲染与映射循环
+        function lockFrameInfoWidths() {
+            const allArtFrames = document.querySelectorAll('.art-frame');
+            const allFrameInfos = document.querySelectorAll('.frame-info');
+
+            // 可以在控制台打印一下，看看究竟找到了几个框
+            console.log(`🔍 尝试锁定宽度：找到了 ${allArtFrames.length} 个 art-frame`);
+
+            allArtFrames.forEach((frame, index) => {
+                if (allFrameInfos[index]) {
+                    const exactWidth = frame.getBoundingClientRect().width;
+                    console.log(`第 ${index + 1} 个框的宽度是:`, exactWidth);
+
+                    // 只要宽度正常，就强制赋值
+                    if (exactWidth > 10) {
+                        allFrameInfos[index].style.width = exactWidth + 'px';
+                    }
+                }
+            });
+        }
         function animate() {
             requestAnimationFrame(animate);
-
             const t = performance.now() * 0.001;
             const aspect = window.innerWidth / window.innerHeight;
             const frustumW = frustumHeight * aspect;
@@ -224,23 +287,103 @@
             const camLeft = -frustumW / 2;
             const w = (Math.PI * 2) / 16;
 
+            // 第一步：计算所有位置和层级
             items.forEach((item) => {
-                // 1. 独立游走动画
-                const currentVw = item.conf.baseL + Math.sin(t * 0.5 + item.offsetX) * item.conf.ampL;
-                const currentVh = item.conf.baseT + Math.cos(t * 0.6 + item.offsetY) * item.conf.ampT;
-                item.mesh.position.x = camLeft + (currentVw / 100) * frustumW;
-                item.mesh.position.y = camTop - (currentVh / 100) * frustumHeight;
-
-                // 2. 独立3D旋转与形变 (引入了原代码里的比例逻辑)
+                // 🚀 1. 【顺序调整】先计算当前的缩放比例，这样我们才能知道这个框在这一刻究竟有多大
                 item.mesh.scale.x = item.scaleBase + Math.sin(t * w * 4 * item.speedScale + item.scaleOffX) * (item.scaleBase * 0.4);
                 item.mesh.scale.y = item.scaleBase * 0.8 + Math.cos(t * w * 2 * item.speedScale + item.scaleOffY) * (item.scaleBase * 0.3);
-                item.mesh.rotation.x = Math.sin(t * w * 2 + item.rotOffX) * 0.6;
-                item.mesh.rotation.y = Math.sin(t * w * 1 + item.rotOffY) * 0.8;
+                // 🌟 新增：动态改变 Z 轴厚度
+                // 基础厚度设为 scaleBase 的 0.4 倍（让它看起来像个画框而不是正方体）
+                // 波动幅度设为 0.1 倍（比 X 的 0.4 和 Y 的 0.3 都要小很多，显得克制且精致）
+                // 频率使用 t * w * 3（和 XY 错开，让呼吸感更自然）
+                item.mesh.scale.z = (item.scaleBase * 0.5) + Math.sin(t * w * 3 * item.speedScale + item.scaleOffX) * (item.scaleBase * 0.1);
 
-                // 3. 🎯 将 3D Box 投影到 2D 屏幕
+                // 🚀 2. 【更新】计算画框对角线的“最大物理半径”
+                // 现在把动态的 scale.z 也加进勾股定理里，完美算出 3D 空间里的极限对角线长度
+                const maxRadiusWorld = Math.sqrt(
+                    Math.pow(item.mesh.scale.x, 2) +
+                    Math.pow(item.mesh.scale.y, 2) +
+                    Math.pow(item.mesh.scale.z, 2)
+                );
+                const safeHalfW = (maxRadiusWorld / frustumW) * 100 + 4;
+                const safeHalfH = (maxRadiusWorld / frustumHeight) * 100 + 4;
+
+                // 🚀 3. 【新增】动态限制 X 轴运动范围 (柔性挤压机制)
+                // 算出原定轨迹的左右极限，如果碰到了安全边界，就把极限强制拉回屏幕内
+                let targetMinVw = Math.max(safeHalfW, item.conf.baseL - item.conf.ampL);
+                let targetMaxVw = Math.min(100 - safeHalfW, item.conf.baseL + item.conf.ampL);
+                if (targetMinVw > targetMaxVw) targetMinVw = targetMaxVw = (targetMinVw + targetMaxVw) / 2; // 极端情况防爆保护
+
+                // 根据被压缩后的新极限，重新算出它当前的中心点和振幅，保持完美的平滑正弦运动
+                const actualBaseL = (targetMinVw + targetMaxVw) / 2;
+                const actualAmpL = (targetMaxVw - targetMinVw) / 2;
+                const currentVw = actualBaseL + Math.sin(t * 0.5 + item.offsetX) * actualAmpL;
+
+                // 🚀 4. 【新增】动态限制 Y 轴运动范围 (同理)
+                let targetMinVh = Math.max(safeHalfH, item.conf.baseT - item.conf.ampT);
+                let targetMaxVh = Math.min(100 - safeHalfH, item.conf.baseT + item.conf.ampT);
+                if (targetMinVh > targetMaxVh) targetMinVh = targetMaxVh = (targetMinVh + targetMaxVh) / 2;
+
+                const actualBaseT = (targetMinVh + targetMaxVh) / 2;
+                const actualAmpT = (targetMaxVh - targetMinVh) / 2;
+                const currentVh = actualBaseT + Math.cos(t * 0.6 + item.offsetY) * actualAmpT;
+
+                // 🚀 5. 【调整】将安全计算后的最终坐标应用到 3D 空间
+                const currentZ = item.baseZ + Math.sin(t * 0.4 + item.offsetZ) * 15;
+                item.mesh.position.set(
+                    camLeft + (currentVw / 100) * frustumW,
+                    camTop - (currentVh / 100) * frustumHeight,
+                    currentZ
+                );
+
+                // 1. 先算出原始的波形值（从 -1 到 1）
+                const rawX = Math.sin(t * w * 2 + item.rotOffX);
+                const rawY = Math.sin(t * w * 1 + item.rotOffY);
+
+                // ... (下面紧接着是你原本的 🌟 完美同步核心：侦测翻面的瞬间 🌟 等代码，保持不变) ...
+
+                // 🌟 完美同步核心：侦测翻面的瞬间 🌟
+                const currentSignX = Math.sign(rawX);
+
+                // 如果发现正负号发生反转，说明就在这一帧，画框刚好穿过了 0 值（正在翻面）！
+                if (item.prevSignX !== undefined && item.prevSignX !== currentSignX) {
+
+                    // 👉 此时画框正处于侧立状态（面积最小，视线盲区）
+                    // 在这个绝对完美的瞬间，去执行你的“切换图片/切换数据”逻辑！
+
+                    // 假设你有一个函数是用来给这个 item 换图的，直接在这里调用：
+                    updateItemContent(item);
+
+                }
+                // 将当前的正负号记录下来，供下一帧对比
+                item.prevSignX = currentSignX;
+
+                const angleArgX = t * w * 2 + item.rotOffX;
+                const speedX = Math.cos(angleArgX);
+                const currentSpeedSignX = Math.sign(speedX);
+
+                // 如果速度的符号变了，说明速度刚穿过 0，也就是角度达到了极大值或极小值！
+                if (item.prevSpeedSignX !== undefined && item.prevSpeedSignX !== currentSpeedSignX) {
+
+                    // 👉 视觉：旋转到了极限角度，停顿中
+                    console.log("角度达到极限，停顿切图！");
+                    updateItemContent(item); // 再次触发换图
+
+                }
+                // 记住当前速度符号
+                item.prevSpeedSignX = currentSpeedSignX;
+
+                // 2. 波形重塑魔法：使用 0.5 次方（开平方根）。
+                // 这会让小数迅速变大（比如 0.1 会瞬间变成 0.31），从而飞速穿过 0 值区域。
+                const shapeX = Math.sign(rawX) * Math.pow(Math.abs(rawX), 0.6);
+                const shapeY = Math.sign(rawY) * Math.pow(Math.abs(rawY), 0.6);
+
+                // 3. 乘以你想要的极限角度幅度
+                item.mesh.rotation.x = shapeX * 0.6;
+                item.mesh.rotation.y = shapeY * 0.6;
+
                 item.mesh.updateMatrixWorld();
                 const box3D = new THREE.Box3().setFromObject(item.mesh);
-
                 const worldW = box3D.max.x - box3D.min.x;
                 const worldH = box3D.max.y - box3D.min.y;
                 item.currentRatio = worldW / worldH;
@@ -250,19 +393,99 @@
                 const pixelLeft = ((box3D.min.x - camLeft) / frustumW) * window.innerWidth;
                 const pixelTop = ((camTop - box3D.max.y) / frustumHeight) * window.innerHeight;
 
-                const padding = 40;
-
-                // 1. 让底下的 DOM 画框（图片容器）长宽都加上 padding，比 3D Box 大一圈
+                const padding = 20;
                 item.dom.style.width = `${pixelW + padding}px`;
                 item.dom.style.height = `${pixelH + padding}px`;
-
-                // 2. 核心：因为画框变大了，为了让 3D 线框依然处于正中心，必须把画框向左、向上偏移 padding 的一半
                 item.dom.style.transform = `translate(${pixelLeft - padding / 2}px, ${pixelTop - padding / 2}px)`;
 
                 rebuildStrips(item);
             });
+            // 🌟 新增核心逻辑：严格按照 currentZ 远近排序，赋予绝对不重复的 z-index
+            const sortedItems = [...items].sort((a, b) => a.currentZ - b.currentZ);
 
-            renderer.render(scene, camera);
+            sortedItems.forEach((item, index) => {
+                // 最远的 index 是 0 (zIndex: 10, 11)
+                // 最近的 index 是 7 (zIndex: 80, 81)
+                const strictZIndexBase = (index + 1) * 10;
+
+                item.dom.style.zIndex = strictZIndexBase;
+                item.canvas.style.zIndex = strictZIndexBase + 1;
+            });
+
+            // 🌟 第二步：分层独立渲染！
+            items.forEach((item) => {
+                // 1. 先把所有别的 3D 框隐藏，确保舞台上只有这一个方块
+                items.forEach(other => {
+                    other.mesh.visible = false;
+                    other.stripsGroup.visible = false;
+                });
+
+                // 2. 只显示当前这一个方块
+                item.mesh.visible = true;
+                item.stripsGroup.visible = true;
+
+                // 3. 渲染到我们那张“看不见”的 WebGL 后台画板上
+                renderer.render(scene, camera);
+
+                // 4. 将画好的结果“复印”到当前方块专属的 2D Canvas 上
+                item.ctx.clearRect(0, 0, item.canvas.width, item.canvas.height);
+                item.ctx.drawImage(renderer.domElement, 0, 0);
+            });
+        }
+
+        function onWindowResize() {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -frustumHeight * aspect / 2;
+            camera.right = frustumHeight * aspect / 2;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            // 🌟 窗口变化时，同步更新所有的专属画布大小
+            items.forEach(item => {
+                item.canvas.width = window.innerWidth * window.devicePixelRatio;
+                item.canvas.height = window.innerHeight * window.devicePixelRatio;
+            });
+        }
+        // 🌟 智能+随机匹配机制：解决重复图片问题
+        function updateItemContent(item) {
+            if (sequence.length === 0) return;
+
+            // 1. 获取当前屏幕上【所有画框】正在显示的图片名字集合
+            // 这样可以防止画框 A 和画框 B 同时显示同一张图
+            const inUseNames = new Set(items.map(i => i.lastImageName).filter(Boolean));
+
+            // 2. 计算数据库中所有画作与当前画框的比例差距
+            const candidates = sequence.map(art => {
+                return {
+                    artData: art,
+                    diff: Math.abs(art.ratioVal - item.currentRatio)
+                };
+            });
+
+            // 3. 过滤掉屏幕上正在显示的画作，并按差距从小到大（最匹配到最不匹配）排序
+            const availableCandidates = candidates
+                .filter(c => !inUseNames.has(c.artData.name))
+                .sort((a, b) => a.diff - b.diff);
+
+            if (availableCandidates.length === 0) return; // 极端情况防爆
+
+            // 4. 🌟 核心魔法：不要每次都拿第 1 名！
+            // 我们从最匹配的【前 8 名】里随机抽选一张。
+            // 这不仅保证了比例看着舒服，还能让每次翻面都有开盲盒的新鲜感！
+            const poolSize = Math.min(8, availableCandidates.length);
+            const randomIndex = Math.floor(Math.random() * poolSize);
+            const chosenArt = availableCandidates[randomIndex].artData;
+
+            // 5. 瞬间替换图片和文字
+            if (chosenArt.name !== item.lastImageName) {
+                item.img.src = loadedImages[chosenArt.name] ? loadedImages[chosenArt.name].src : (imageFolderPath + chosenArt.name);
+                item.label.innerText = chosenArt.title || chosenArt.name;
+                item.lastImageName = chosenArt.name;
+            }
+
+
+            lockFrameInfoWidths();
+
         }
 
         // ⏱️ 智能匹配：寻找数据库中最相似的画作 (已更新为你的逻辑)
@@ -290,41 +513,112 @@
 
                         item.lastImageName = closestArt.name;
                     }
+
+
+                    lockFrameInfoWidths();
+
                 });
             }, interval_ms);
         }
 
         // 🎨 辅助绘图逻辑
+        // 🌟 1. 原汁原味的 2D 投影宽度补偿算法
+        function getOrthographicScale(pStartWorld, pEndWorld, dirWorld, targetHeight) {
+            const dx = pEndWorld.x - pStartWorld.x;
+            const dy = pEndWorld.y - pStartWorld.y;
+            const length2D = Math.sqrt(dx * dx + dy * dy);
+
+            if (length2D < 0.0001) return 0;
+
+            const cross2D = Math.abs(dx * dirWorld.y - dy * dirWorld.x);
+            if (cross2D < 0.0001) return targetHeight;
+
+            return (targetHeight * length2D) / cross2D;
+        }
+
+        // 🌟 2. 完美适配 8 个独立方块的 rebuildStrips 函数（包含防爆机制）
         function rebuildStrips(item) {
             const kGroup = item.stripsGroup;
+            const mesh = item.mesh;
+
             while (kGroup.children.length > 0) {
                 const m = kGroup.children[0];
                 if (m.geometry) m.geometry.dispose();
                 kGroup.remove(m);
             }
+
             const matWhiteDS = new THREE.MeshBasicMaterial({ color: 0x000, side: THREE.DoubleSide });
-            const absoluteStroke = 0.15;
-            const qWorld = new THREE.Quaternion();
-            item.mesh.getWorldQuaternion(qWorld);
-            const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
-            const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
-            const s1 = makeStrip(worldVertex(boxGeo, 5, item.mesh), worldVertex(boxGeo, 7, item.mesh), axisX, matWhiteDS);
-            const s2 = makeStrip(worldVertex(boxGeo, 1, item.mesh), worldVertex(boxGeo, 5, item.mesh).add(worldVertex(boxGeo, 7, item.mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
-            const s3 = makeCenteredStrip(worldVertex(boxGeo, 2, item.mesh), worldVertex(boxGeo, 5, item.mesh).add(worldVertex(boxGeo, 7, item.mesh)).multiplyScalar(0.5).lerp(worldVertex(boxGeo, 1, item.mesh), 0.2), axisY, matWhiteDS);
+
+            mesh.updateMatrixWorld(true);
+
+            // 设定想要的线条像素宽度
+            const strokePx = 4;
+            const absoluteStroke = strokePx * (frustumHeight / window.innerHeight);
+
+            // 提取顶点 
+            const v1 = worldVertex(boxGeo, 1, mesh);
+            const v2 = worldVertex(boxGeo, 2, mesh);
+            const v5 = worldVertex(boxGeo, 5, mesh);
+            const v7 = worldVertex(boxGeo, 7, mesh);
+
+            const vMid57 = v5.clone().add(v7).multiplyScalar(0.5);
+            const vS3End = vMid57.clone().lerp(v1, 0.2);
+
+            const axisXWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 0);
+            const axisYWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 1);
+
+            // ⚠️ 注意这里：将 const 改成了 let，因为后面我们要对它们重新赋值
+            let scaleS1 = getOrthographicScale(v5, v7, axisXWorld, absoluteStroke);
+            let scaleS2 = getOrthographicScale(v1, vMid57, axisYWorld, absoluteStroke);
+            let scaleS3 = getOrthographicScale(v2, vS3End, axisYWorld, absoluteStroke);
+
+            // ==========================================
+            // 🚀 【核心防爆机制】自动追踪与极限值拦截
+            // ==========================================
+            const MULTIPLIER_S1 = 1.5;
+            const MULTIPLIER_S2 = 1.5;
+            const MULTIPLIER_S3 = 1.5;
+
+            // W 代表当前方块的物理基准最大尺寸 (基础尺寸 2 * 当前最大缩放比例)
+            // 这保证了方块变大时，爆炸极限也跟着合理放大
+            const W = Math.max(mesh.scale.x, mesh.scale.y) * 2;
+
+            function applyAntiExplosion(scale, multiplier) {
+                const limit = W * multiplier;
+
+                // 如果 scale 爆炸（无效或超过个体上限）
+                if (!Number.isFinite(scale) || Math.abs(scale) > limit) {
+                    return limit; // 触发防爆，直接锁定在该个体的最大上限
+                }
+                return Math.abs(scale); // 安全区间
+            }
+
+            // 🚀 分别传入各自的倍数进行过滤，并重新赋值
+            scaleS1 = applyAntiExplosion(scaleS1, MULTIPLIER_S1);
+            scaleS2 = applyAntiExplosion(scaleS2, MULTIPLIER_S2);
+            scaleS3 = applyAntiExplosion(scaleS3, MULTIPLIER_S3);
+            // ==========================================
+
+            const offsetS1 = axisXWorld.clone().multiplyScalar(scaleS1);
+            const offsetS2 = axisYWorld.clone().multiplyScalar(-scaleS2);
+            const offsetS3 = axisYWorld.clone().multiplyScalar(scaleS3);
+
+            const s1 = makeStrip(v5, v7, offsetS1, matWhiteDS);
+            const s2 = makeStrip(v1, vMid57, offsetS2, matWhiteDS);
+            const s3 = makeCenteredStrip(v2, vS3End, offsetS3, matWhiteDS);
+
             kGroup.add(s1, s2, s3);
         }
-
         function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
         function makeQuad(p0, p1, p2, p3, mat) {
             const g = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]); g.setIndex([0, 1, 2, 0, 2, 3]); return new THREE.Mesh(g, mat);
         }
+
         function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
         function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
-
-        function onWindowResize() {
-            const aspect = window.innerWidth / window.innerHeight;
-            camera.left = -frustumHeight * aspect / 2; camera.right = frustumHeight * aspect / 2;
-            camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+        function getAbsR01(o) {
+            const m = new THREE.Matrix4().makeRotationFromQuaternion(o.getWorldQuaternion(new THREE.Quaternion())).elements;
+            return { a00: Math.abs(m[0]), a01: Math.abs(m[4]), a10: Math.abs(m[1]), a11: Math.abs(m[5]) };
         }
 
         init();

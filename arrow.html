@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Logo Composer — 恒定线宽版</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #f5f5f5;
+            font-family: monospace, sans-serif;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #rendererCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #rendererCanvas svg {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            background-color: #fff;
+        }
+
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border: 1px solid #ddd;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: inline-block;
+            width: 100px;
+            font-weight: bold;
+        }
+
+        .input-group input {
+            width: 80px;
+            padding: 4px;
+            font-family: inherit;
+        }
+
+        button {
+            padding: 8px 12px;
+            margin-right: 10px;
+            background: #222;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        button:hover {
+            background: #555;
+        }
+
+        .vertex-label {
+            position: absolute;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: bold;
+            pointer-events: none;
+            user-select: none;
+            white-space: nowrap;
+            transform: translate(-50%, -50%);
+        }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="ui-panel">
+        <div class="input-group">
+            <label>Ratio (W:H)</label>
+            <input type="text" id="ratioInput" value="400:300">
+        </div>
+        <div class="input-group">
+            <label>Stroke (px)</label>
+            <input type="number" id="strokeInput" value="12" step="1">
+        </div>
+        <div class="input-group">
+            <label>Pitch (X 轴)</label>
+            <input type="number" id="pitchInput" value="15">
+        </div>
+        <div class="input-group">
+            <label>Yaw (Y 轴)</label>
+            <input type="number" id="yawInput" value="25">
+        </div>
+<div class="input-group">
+    <label>Roll (Z 轴)</label>
+    <input type="number" id="rollInput" value="0">
+</div>
+        <button id="updateBtn">生成/更新</button>
+        <button id="saveBtn">保存 SVG</button>
+    </div>
+
+    <div id="container">
+        <div id="rendererCanvas"></div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.125.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+        let renderer, scene, camera, mesh, kGroup, geo, css2dRenderer, labelGroup;
+        const frustumHeight = 8;
+
+        // 记录当前的画布高度，用于像素换算
+        let currentTargetH = 300;
+
+        const colorParams = {
+            cStroke: '#000000',
+        };
+        const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
+
+        init();
+
+        function init() {
+            const container = document.getElementById('rendererCanvas');
+
+            renderer = new SVGRenderer();
+            container.appendChild(renderer.domElement);
+
+            css2dRenderer = new CSS2DRenderer();
+            css2dRenderer.domElement.style.position = 'absolute';
+            css2dRenderer.domElement.style.top = '50%';
+            css2dRenderer.domElement.style.left = '50%';
+            css2dRenderer.domElement.style.transform = 'translate(-50%, -50%)';
+            css2dRenderer.domElement.style.pointerEvents = 'none'; // 防止遮挡 SVG 交互
+            container.appendChild(css2dRenderer.domElement);
+
+            scene = new THREE.Scene();
+            camera = new THREE.OrthographicCamera(-4, 4, 4, -4, -100, 100);
+
+            geo = new THREE.BoxGeometry(4, 2, 2);
+            const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+            mesh = new THREE.Mesh(geo, mat);
+            scene.add(mesh);
+            const box = new THREE.BoxHelper(mesh, colorParams.cStroke);
+            box.matrixAutoUpdate = true;
+            mesh.add(box);
+
+            document.getElementById('updateBtn').addEventListener('click', updateScene);
+            document.getElementById('saveBtn').addEventListener('click', saveSVG);
+
+            updateScene();
+        }
+
+        function updateScene() {
+            const ratioStr = document.getElementById('ratioInput').value;
+            const pitch = parseFloat(document.getElementById('pitchInput').value) || 0;
+            const yaw = parseFloat(document.getElementById('yawInput').value) || 0;
+            const roll = parseFloat(document.getElementById('rollInput').value) || 0;
+
+            let [rw, rh] = ratioStr.includes(':') ? ratioStr.split(':').map(Number) : [parseFloat(ratioStr), 1];
+            if (!rw || !rh) { rw = 400; rh = 300; }
+
+            // 原本这里有 * 3，现在彻底去掉，回归绝对像素
+            const targetW = rw;
+            const targetH = rh;
+            const aspect = targetW / targetH;
+
+            currentTargetH = targetH;
+
+            // 1. 同步更新两个渲染器的尺寸为输入的绝对像素
+            renderer.setSize(targetW, targetH);
+            css2dRenderer.setSize(targetW, targetH);
+
+            const t = aspect;
+            // 更新相机的视锥体比例
+            camera.left = -frustumHeight * aspect / 2;
+            camera.right = frustumHeight * aspect / 2;
+            camera.top = frustumHeight / 2;
+            camera.bottom = -frustumHeight / 2;
+            camera.updateProjectionMatrix();
+
+            // 2. 设置旋转
+            mesh.rotation.set(deg2rad(pitch), deg2rad(yaw), deg2rad(roll), 'XYZ');
+            mesh.updateMatrixWorld(true);
+
+            // 3. 求解适配当前比例的缩放
+            const R = getAbsR01(mesh);
+            const { hx, denom } = solveHxForWH(t, R);
+            const targetScale = (Math.abs(denom) > 1e-10 && hx > 0) ? hx / 2 : 0.5;
+
+            mesh.scale.set(targetScale, 1, 1);
+            mesh.updateMatrixWorld(true);
+
+            // 4. 计算自适应 Zoom 以撑满相机视口
+            const currentWorldBox = new THREE.Box3().setFromObject(mesh);
+            camera.zoom = calculateTargetZoom(currentWorldBox, aspect);
+            camera.updateProjectionMatrix();
+
+            // 5. 重建笔触
+            rebuildStrips();
+
+            // 6. 更新顶点标签
+            updateVertexLabels();
+
+            renderer.render(scene, camera);
+            css2dRenderer.render(scene, camera);
+        }
+
+
+        function getOrthographicScale(pStartWorld, pEndWorld, dirWorld, targetHeight) {
+            const dx = pEndWorld.x - pStartWorld.x;
+            const dy = pEndWorld.y - pStartWorld.y;
+            const length2D = Math.sqrt(dx * dx + dy * dy);
+
+            if (length2D < 0.0001) return 0;
+
+            const cross2D = Math.abs(dx * dirWorld.y - dy * dirWorld.x);
+            if (cross2D < 0.0001) return targetHeight;
+
+            return (targetHeight * length2D) / cross2D;
+        }
+
+        function rebuildStrips() {
+            if (!geo || !mesh) return;
+            if (!kGroup) { kGroup = new THREE.Group(); scene.add(kGroup); }
+
+            while (kGroup.children.length > 0) {
+                const m = kGroup.children[0];
+                if (m.geometry) m.geometry.dispose();
+                kGroup.remove(m);
+            }
+
+            mesh.updateMatrixWorld(true);
+
+            // 先保留 stationary 原本的“像素 -> 世界单位”换算
+            const strokePx = parseFloat(document.getElementById('strokeInput').value) || 4;
+            const absoluteStroke = (strokePx * frustumHeight) / (currentTargetH * camera.zoom);
+
+            const v1 = worldVertex(geo, 1, mesh);
+            const v2 = worldVertex(geo, 2, mesh);
+            const v3 = worldVertex(geo, 3, mesh);
+            const v4 = worldVertex(geo, 4, mesh);
+            const v6 = worldVertex(geo, 6, mesh);
+            const v7 = worldVertex(geo, 7, mesh);
+
+            const vMid57 = v4.clone().add(v6).multiplyScalar(0.5);
+            const vS3End = vMid57.clone().lerp(v1, 0.2);
+
+            // 用 matrixWorld 的基向量保留 stationary 当前 scale/rotation 的结果
+            const axisXWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 0);
+            const axisYWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 1);
+
+            // 把 samestroke-cal 的“动态算粗细”逻辑接到 stationary 里
+            // const scaleS1 = getOrthographicScale(v4, v6, axisXWorld, absoluteStroke);
+            // const scaleS2 = getOrthographicScale(v1, v4, axisYWorld, absoluteStroke);
+            // const scaleS3 = getOrthographicScale(v2, v4, axisYWorld, absoluteStroke);
+
+            // const offsetS1 = axisXWorld.clone().multiplyScalar(scaleS1);
+            // const offsetS2 = axisYWorld.clone().multiplyScalar(-scaleS2);
+            // const offsetS3 = axisYWorld.clone().multiplyScalar(scaleS3);
+
+            // const s1 = makeStrip(v4, v6, offsetS1, matWhiteDS);
+            // const s2 = makeStrip(v1, v4, offsetS2, matWhiteDS);
+            // const s3 = makeCenteredStrip(v2, v4, offsetS3, matWhiteDS);;
+
+            const scaleS1 = getOrthographicScale(v4, v6, axisXWorld, absoluteStroke);
+            const scaleS2 = getOrthographicScale(v6, v7, axisXWorld, absoluteStroke);
+            const scaleS3 = getOrthographicScale(v6, v3, axisYWorld, absoluteStroke);
+
+            const offsetS1 = axisXWorld.clone().multiplyScalar(scaleS1);
+            const offsetS2 = axisXWorld.clone().multiplyScalar(scaleS2);
+            const offsetS3 = axisYWorld.clone().multiplyScalar(scaleS3);
+
+            const s1 = makeStrip(v4, v6, offsetS1, matWhiteDS);
+            const s2 = makeStrip(v6, v7, offsetS2, matWhiteDS);
+            const s3 = makeStrip(v6, v3, offsetS3, matWhiteDS);;            
+            kGroup.add(s1, s2, s3);
+        }
+
+        function saveSVG() {
+            const svgElement = renderer.domElement;
+            const serializer = new XMLSerializer();
+            let svgString = serializer.serializeToString(svgElement);
+
+            if (!svgString.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
+                svgString = svgString.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+
+            const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+
+            // 获取当前输入的参数，并将冒号替换为 x 以符合操作系统的文件名规范
+            let ratioStr = document.getElementById('ratioInput').value;
+            let safeRatioName = ratioStr.replace(/:/g, 'x');
+            let stroke = document.getElementById('strokeInput').value;
+            let pitch = document.getElementById('pitchInput').value;
+            let yaw = document.getElementById('yawInput').value;
+
+            // 动态设置文件名
+            link.download = `logo-${safeRatioName}-s${stroke}-p${pitch}-y${yaw}.svg`;
+
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }
+
+        function calculateTargetZoom(worldBox, aspect) {
+            const size = new THREE.Vector3();
+            worldBox.getSize(size);
+            const frustumW = frustumHeight * aspect;
+            const zoomW = frustumW / size.x;
+            const zoomH = frustumHeight / size.y;
+            return Math.min(zoomW, zoomH) * 0.9;
+        }
+
+        function updateVertexLabels() {
+            if (!labelGroup) {
+                labelGroup = new THREE.Group();
+                scene.add(labelGroup);
+            }
+
+            // 清空旧标签
+            while (labelGroup.children.length > 0) {
+                labelGroup.remove(labelGroup.children[0]);
+            }
+
+            // 为立方体的8个顶点添加标签
+            for (let i = 0; i < 8; i++) {
+                const vertexPos = worldVertex(geo, i, mesh);
+
+                const div = document.createElement('div');
+                div.className = 'vertex-label';
+                div.textContent = i;
+
+                const label = new CSS2DObject(div);
+                label.position.copy(vertexPos);
+                labelGroup.add(label);
+            }
+        }
+
+        function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
+        function makeQuad(p0, p1, p2, p3, mat) {
+            const g = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]);
+            g.setIndex([0, 1, 2, 0, 2, 3]);
+            return new THREE.Mesh(g, mat);
+        }
+        function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
+        function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
+        function deg2rad(d) { return d * Math.PI / 180; }
+
+        function getAbsR01(o) {
+            const m = new THREE.Matrix4().makeRotationFromQuaternion(o.getWorldQuaternion(new THREE.Quaternion())).elements;
+            return { a00: Math.abs(m[0]), a01: Math.abs(m[4]), a02: Math.abs(m[8]), a10: Math.abs(m[1]), a11: Math.abs(m[5]), a12: Math.abs(m[9]) };
+        }
+
+        function solveHxForWH(t, R) {
+            return {
+                hx: (t * (R.a11 + R.a12) - (R.a01 + R.a02)) / (R.a00 - t * R.a10),
+                denom: (R.a00 - t * R.a10)
+            };
+        }
+
+    </script>
+</body>
+
+</html>

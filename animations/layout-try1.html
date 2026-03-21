@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Fluid 3D Broken Grid Gallery (Local DB Version)</title>
+    <link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&display=swap" rel="stylesheet">
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #f2f2f2;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        /* 1. DOM 画框层 */
+        #dom-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        .art-frame {
+            position: absolute;
+            top: 0;
+            left: 0;
+            background-color: #fff;
+            box-shadow: 10px 10px 30px rgba(0, 0, 0, 0.1);
+            transform-origin: top left;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            /* overflow: hidden; */
+            box-sizing: border-box;
+        }
+
+        .art-frame img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0.9;
+            mix-blend-mode: multiply;
+            /* transition: opacity 0.5s ease; */
+        }
+
+        .frame-info {
+            position: absolute;
+            top: 100%;
+            left: 0px;
+            font-family: 'Fragment Mono', monospace;
+            font-size: 10px;
+            color: #000;
+        }
+
+        /* 2. WebGL 渲染层 */
+        #rendererCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        .bottom-text {
+            position: fixed;
+            z-index: 1000;
+            color: #000;
+            letter-spacing: 1px;
+            pointer-events: none;
+        }
+
+        .bottom-left-text {
+            bottom: 30px;
+            left: 40px;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .bottom-right-text {
+            bottom: 30px;
+            right: 40px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="dom-layer"></div>
+    <canvas id="rendererCanvas"></canvas>
+
+    <div class="bottom-text bottom-left-text">
+        FLUID 3D GRID & AUTONOMOUS SCALING<br>
+        POWERED BY LOCAL MUSEUM DB
+    </div>
+    <div class="bottom-text bottom-right-text">(EXPERIMENTAL)</div>
+
+    <script src="/assets/museumDB.js"></script>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // ==========================================
+        // ⚙️ 恢复你的全局配置与数据预加载逻辑
+        // ==========================================
+        const sequence = window.museumDB || [];
+        const imageFolderPath = '/assets/museum_frames/';
+        const loadedImages = {};
+
+        // 预加载所有图片到内存
+        sequence.forEach(item => {
+            const img = new Image();
+            img.src = imageFolderPath + item.name;
+            loadedImages[item.name] = img;
+        });
+
+        // ⚙️ 8个独立方块的基础位置(vw/vh)和波动幅度
+        const blocksConfig = [
+            { baseL: 20, baseT: 25, ampL: 20, ampT: 25, zIndex: 10 },
+            { baseL: 50, baseT: 15, ampL: 15, ampT: 15, zIndex: 5 },
+            { baseL: 80, baseT: 25, ampL: 20, ampT: 20, zIndex: 5 },
+            { baseL: 25, baseT: 50, ampL: 15, ampT: 15, zIndex: 6 },
+            { baseL: 50, baseT: 45, ampL: 20, ampT: 20, zIndex: 1 },
+            { baseL: 75, baseT: 55, ampL: 15, ampT: 15, zIndex: 6 },
+            { baseL: 25, baseT: 75, ampL: 15, ampT: 15, zIndex: 7 },
+            { baseL: 70, baseT: 75, ampL: 15, ampT: 15, zIndex: 2 }
+        ];
+
+        const frustumHeight = 30;
+        const items = [];
+        let scene, camera, renderer, boxGeo;
+
+        function init() {
+            if (sequence.length === 0) {
+                console.warn("⚠️ 找不到 window.museumDB，检查 /assets/museumDB.js 路径！");
+            }
+
+            const canvas = document.getElementById('rendererCanvas');
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            scene = new THREE.Scene();
+
+            const aspect = window.innerWidth / window.innerHeight;
+            camera = new THREE.OrthographicCamera(
+                -frustumHeight * aspect / 2, frustumHeight * aspect / 2,
+                frustumHeight / 2, -frustumHeight / 2, -100, 100
+            );
+
+            boxGeo = new THREE.BoxGeometry(2, 2, 2);
+            const matWireframe = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+
+            const domLayer = document.getElementById('dom-layer');
+
+            blocksConfig.forEach((conf, index) => {
+                const mesh = new THREE.Mesh(boxGeo, matWireframe);
+                scene.add(mesh);
+
+                const helper = new THREE.BoxHelper(mesh, 0x000000);
+                mesh.add(helper);
+
+                const stripsGroup = new THREE.Group();
+                scene.add(stripsGroup);
+
+                const domEl = document.createElement('div');
+                domEl.className = 'art-frame';
+                domEl.style.zIndex = conf.zIndex;
+
+                const imgEl = document.createElement('img');
+                imgEl.src = '';
+
+                const labelEl = document.createElement('div');
+                labelEl.className = 'frame-info';
+
+                domEl.appendChild(imgEl);
+                domEl.appendChild(labelEl);
+                domLayer.appendChild(domEl);
+
+                const data = {
+                    conf: conf, mesh: mesh, stripsGroup: stripsGroup, dom: domEl, img: imgEl, label: labelEl,
+                    currentRatio: 1, lastImageName: '',
+                    offsetX: Math.random() * Math.PI * 2, offsetY: Math.random() * Math.PI * 2,
+                    scaleOffX: Math.random() * Math.PI * 2, scaleOffY: Math.random() * Math.PI * 2,
+                    rotOffX: Math.random() * Math.PI * 2, rotOffY: Math.random() * Math.PI * 2,
+                    scaleBase: index === 4 ? 4 : (Math.random() * 1.5 + 1),
+                    speedScale: Math.random() * 0.5 + 0.5
+                };
+                items.push(data);
+            });
+
+            window.addEventListener('resize', onWindowResize);
+
+            requestAnimationFrame(animate);
+            startMatchingTimer(800); // 间隔时间，原版是200ms，这里设为1000ms避免8个框同时闪烁过于刺眼，可根据喜好调
+        }
+
+        // 🏃‍♂️ 核心渲染与映射循环
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const t = performance.now() * 0.001;
+            const aspect = window.innerWidth / window.innerHeight;
+            const frustumW = frustumHeight * aspect;
+            const camTop = frustumHeight / 2;
+            const camLeft = -frustumW / 2;
+            const w = (Math.PI * 2) / 16;
+
+            items.forEach((item) => {
+                // 1. 独立游走动画
+                const currentVw = item.conf.baseL + Math.sin(t * 0.5 + item.offsetX) * item.conf.ampL;
+                const currentVh = item.conf.baseT + Math.cos(t * 0.6 + item.offsetY) * item.conf.ampT;
+                item.mesh.position.x = camLeft + (currentVw / 100) * frustumW;
+                item.mesh.position.y = camTop - (currentVh / 100) * frustumHeight;
+
+                // 2. 独立3D旋转与形变 (引入了原代码里的比例逻辑)
+                item.mesh.scale.x = item.scaleBase + Math.sin(t * w * 4 * item.speedScale + item.scaleOffX) * (item.scaleBase * 0.4);
+                item.mesh.scale.y = item.scaleBase * 0.8 + Math.cos(t * w * 2 * item.speedScale + item.scaleOffY) * (item.scaleBase * 0.3);
+                item.mesh.rotation.x = Math.sin(t * w * 2 + item.rotOffX) * 0.6;
+                item.mesh.rotation.y = Math.sin(t * w * 1 + item.rotOffY) * 0.8;
+
+                // 3. 🎯 将 3D Box 投影到 2D 屏幕
+                item.mesh.updateMatrixWorld();
+                const box3D = new THREE.Box3().setFromObject(item.mesh);
+
+                const worldW = box3D.max.x - box3D.min.x;
+                const worldH = box3D.max.y - box3D.min.y;
+                item.currentRatio = worldW / worldH;
+
+                const pixelW = (worldW / frustumW) * window.innerWidth;
+                const pixelH = (worldH / frustumHeight) * window.innerHeight;
+                const pixelLeft = ((box3D.min.x - camLeft) / frustumW) * window.innerWidth;
+                const pixelTop = ((camTop - box3D.max.y) / frustumHeight) * window.innerHeight;
+
+                const padding = 40;
+
+                // 1. 让底下的 DOM 画框（图片容器）长宽都加上 padding，比 3D Box 大一圈
+                item.dom.style.width = `${pixelW + padding}px`;
+                item.dom.style.height = `${pixelH + padding}px`;
+
+                // 2. 核心：因为画框变大了，为了让 3D 线框依然处于正中心，必须把画框向左、向上偏移 padding 的一半
+                item.dom.style.transform = `translate(${pixelLeft - padding / 2}px, ${pixelTop - padding / 2}px)`;
+
+                rebuildStrips(item);
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        // ⏱️ 智能匹配：寻找数据库中最相似的画作 (已更新为你的逻辑)
+        function startMatchingTimer(interval_ms) {
+            setInterval(() => {
+                if (sequence.length === 0) return; // 数据库未加载时不执行
+
+                items.forEach((item) => {
+                    let closestArt = sequence[0];
+                    let minDiff = Math.abs(closestArt.ratioVal - item.currentRatio);
+
+                    for (let i = 1; i < sequence.length; i++) {
+                        const diff = Math.abs(sequence[i].ratioVal - item.currentRatio);
+                        if (diff < minDiff) {
+                            minDiff = diff;
+                            closestArt = sequence[i];
+                        }
+                    }
+
+                    // 比较 name 来避免重复加载
+                    if (closestArt.name !== item.lastImageName) {
+                        // 直接替换图片和文字，没有任何延迟
+                        item.img.src = loadedImages[closestArt.name] ? loadedImages[closestArt.name].src : (imageFolderPath + closestArt.name);
+                        item.label.innerText = closestArt.title || closestArt.name;
+
+                        item.lastImageName = closestArt.name;
+                    }
+                });
+            }, interval_ms);
+        }
+
+        // 🎨 辅助绘图逻辑
+        function rebuildStrips(item) {
+            const kGroup = item.stripsGroup;
+            while (kGroup.children.length > 0) {
+                const m = kGroup.children[0];
+                if (m.geometry) m.geometry.dispose();
+                kGroup.remove(m);
+            }
+            const matWhiteDS = new THREE.MeshBasicMaterial({ color: 0x000, side: THREE.DoubleSide });
+            const absoluteStroke = 0.15;
+            const qWorld = new THREE.Quaternion();
+            item.mesh.getWorldQuaternion(qWorld);
+            const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            const s1 = makeStrip(worldVertex(boxGeo, 5, item.mesh), worldVertex(boxGeo, 7, item.mesh), axisX, matWhiteDS);
+            const s2 = makeStrip(worldVertex(boxGeo, 1, item.mesh), worldVertex(boxGeo, 5, item.mesh).add(worldVertex(boxGeo, 7, item.mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
+            const s3 = makeCenteredStrip(worldVertex(boxGeo, 2, item.mesh), worldVertex(boxGeo, 5, item.mesh).add(worldVertex(boxGeo, 7, item.mesh)).multiplyScalar(0.5).lerp(worldVertex(boxGeo, 1, item.mesh), 0.2), axisY, matWhiteDS);
+            kGroup.add(s1, s2, s3);
+        }
+
+        function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
+        function makeQuad(p0, p1, p2, p3, mat) {
+            const g = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]); g.setIndex([0, 1, 2, 0, 2, 3]); return new THREE.Mesh(g, mat);
+        }
+        function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
+        function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
+
+        function onWindowResize() {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -frustumHeight * aspect / 2; camera.right = frustumHeight * aspect / 2;
+            camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        init();
+    </script>
+</body>
+
+</html>

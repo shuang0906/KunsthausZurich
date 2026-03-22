@@ -78,6 +78,7 @@
             justify-content: center;
             align-items: center;
             box-sizing: border-box;
+            will-change: width, height, transform;
         }
 
         /* 🌟 新增：专门用来“关住”图片的裁切层 */
@@ -399,16 +400,16 @@
                     // 3. 🌟 如果现在有聚焦的画框，就给它单独加上缩小的类名
                     if (focusedItem) {
                         focusedItem.dom.classList.add('is-focused');
-if (infoEl) {
+                        if (infoEl) {
                             // ==========================================
                             // 🌟 纯 2D 降维打击：直接用屏幕像素算，绕开 frustumW！
                             // ==========================================
-                            
+
                             // A. 拿到屏幕宽和高的最小值
                             const minScreenEdge = Math.min(window.innerWidth, window.innerHeight);
-                            
+
                             // B. 对应你代码里的 0.8 比例，算出放大后的最大像素边界
-                            const maxTargetPixels = minScreenEdge * 0.8; 
+                            const maxTargetPixels = minScreenEdge * 0.8;
 
                             // C. 拿到图片的宽高比
                             let imgRatio = 1;
@@ -421,12 +422,11 @@ if (infoEl) {
 
                             // E. 算一下我们现在有多大，算出初始缩放比例 (给 CSS 动画用)
                             // 减去 20 是因为你 DOM 追踪逻辑里写了 padding = 20
-                            const currentPixelW = item.dom.offsetWidth - 20; 
+                            const currentPixelW = item.dom.offsetWidth - 20;
                             const startScale = currentPixelW / finalPixelW;
 
                             // F. 锁定最终宽度，并把初始比例传给 CSS
                             infoEl.style.width = finalPixelW + 'px';
-                            infoEl.style.setProperty('--start-scale', startScale);
                         }
                     }
 
@@ -573,7 +573,7 @@ if (infoEl) {
                 if (!item.animState) {
                     item.animState = { ...targetState, focusP: 0.0 };
                 } else {
-                    const ease = 0.15;
+                    const ease = 0.2;
                     item.animState.sX += (targetState.sX - item.animState.sX) * ease;
                     item.animState.sY += (targetState.sY - item.animState.sY) * ease;
                     item.animState.sZ += (targetState.sZ - item.animState.sZ) * ease;
@@ -645,9 +645,18 @@ if (infoEl) {
                 const pixelTop = ((camTop - box3D.max.y) / frustumHeight) * window.innerHeight;
 
                 const padding = 20;
-                item.dom.style.width = `${pixelW + padding}px`;
-                item.dom.style.height = `${pixelH + padding}px`;
-                item.dom.style.transform = `translate(${pixelLeft - padding / 2}px, ${pixelTop - padding / 2}px)`;
+                // 🌟 优化 1：抹除疯狂的极小浮点数，减轻浏览器 Layout 压力
+                const finalW = Math.round(pixelW + padding);
+                const finalH = Math.round(pixelH + padding);
+                const finalX = (pixelLeft - padding / 2).toFixed(1); // 坐标保留一位小数足够了
+                const finalY = (pixelTop - padding / 2).toFixed(1);
+
+                item.dom.style.width = `${finalW}px`;
+                item.dom.style.height = `${finalH}px`;
+
+                // 🌟 优化 2：【最关键】把 translate 换成 translate3d！
+                // 这会强制浏览器把这个 DOM 元素丢给独立显卡（GPU）的图层去渲染，避开 CPU 瓶颈！
+                item.dom.style.transform = `translate3d(${finalX}px, ${finalY}px, 0)`;
 
                 rebuildStrips(item);
             });

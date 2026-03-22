@@ -10,7 +10,7 @@ from io import BytesIO
 # ==========================================
 # ⚙️ 配置区
 # ==========================================
-TARGET_COUNT = 300 
+TARGET_COUNT = 500 
 FOLDER_PATH = "./assets/museum_frames"
 DB_FILE = "./assets/museumDB.js"
 
@@ -66,6 +66,8 @@ for obj_id in object_ids:
         if any(char in raw_title for char in forbidden_title_chars):
             continue
             
+        objectEndDate = obj_data.get("objectEndDate", "")
+
         # 🛑 过滤 3：获取艺术家姓名并进行长度与标点限制
         artist_name = str(obj_data.get("artistDisplayName", "Unknown")).strip()
         
@@ -113,6 +115,7 @@ for obj_id in object_ids:
             "title": title,
             "artistDisplayName": artist_name,
             "ratioVal": ratio,
+            "objectEndDate": objectEndDate,
             "w": w,
             "h": h
         })

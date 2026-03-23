@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Logo Composer — 指数网格版</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #f5f5f5;
+            font-family: monospace, sans-serif;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #rendererCanvas {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #rendererCanvas svg {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            background-color: #f5f5f5;
+            /* 匹配 p5 的 background(245) */
+        }
+
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border: 1px solid #ddd;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: inline-block;
+            width: 100px;
+            font-weight: bold;
+        }
+
+        .input-group input {
+            width: 80px;
+            padding: 4px;
+            font-family: inherit;
+        }
+
+        button {
+            padding: 8px 12px;
+            margin-right: 10px;
+            background: #222;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        button:hover {
+            background: #555;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="ui-panel">
+        <div class="input-group">
+            <label>列数 (Cols)</label>
+            <input type="number" id="colsInput" value="6" step="1">
+        </div>
+        <div class="input-group">
+            <label>行数 (Rows)</label>
+            <input type="number" id="rowsInput" value="6" step="1">
+        </div>
+
+        <div class="input-group">
+            <label>列数指数</label>
+            <input type="number" id="colsPow" value="1.2" step="0.1">
+        </div>
+        <div class="input-group">
+            <label>行数指数</label>
+            <input type="number" id="rowsPow" value="1.2" step="0.1">
+        </div>
+
+        <div class="input-group">
+            <label>Stroke (px)</label>
+            <input type="number" id="strokeInput" value="4" step="0.5">
+        </div>
+        <div class="input-group">
+            <label>Pitch (X 轴)</label>
+            <input type="number" id="pitchInput" value="15">
+        </div>
+        <div class="input-group">
+            <label>Yaw (Y 轴)</label>
+            <input type="number" id="yawInput" value="30">
+        </div>
+        <div class="input-group">
+            <label>Pitch 起点</label>
+            <input type="number" id="pitchStartInput" value="0">
+        </div>
+        <div class="input-group">
+            <label>Pitch 终点</label>
+            <input type="number" id="pitchEndInput" value="35">
+        </div>
+
+        <div class="input-group">
+            <label>Yaw 起点</label>
+            <input type="number" id="yawStartInput" value="0">
+        </div>
+        <div class="input-group">
+            <label>Yaw 终点</label>
+            <input type="number" id="yawEndInput" value="30">
+        </div>
+
+        <div class="input-group">
+            <label>Roll (Z 轴)</label>
+            <input type="number" id="rollInput" value="0">
+        </div>
+
+        <div class="input-group">
+            <label>Padding(px)</label>
+            <input type="number" id="paddingInput" value="5" step="1">
+        </div>
+
+        <button id="updateBtn">生成网格</button>
+        <button id="saveBtn">保存 SVG</button>
+    </div>
+
+    <div id="container">
+        <div id="rendererCanvas"></div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.125.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.125.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
+
+        let renderer, scene, camera, geo;
+        let masterGroup; // 容纳所有生成的对象
+
+        // 画布与网格配置 (匹配 p5 设定)
+        const canvasW = 600;
+        const canvasH = 600;
+        const gridX = 40;
+        const gridY = 40;
+        const gridW = 520;
+        const gridH = 520;
+
+        const colorParams = { cStroke: '#000000', cGrid: '#b4b4b4' };
+        const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
+
+        init();
+
+        function init() {
+            const container = document.getElementById('rendererCanvas');
+            renderer = new SVGRenderer();
+            renderer.setSize(canvasW, canvasH);
+            container.appendChild(renderer.domElement);
+
+            scene = new THREE.Scene();
+            // 使用1:1的像素映射，原点在屏幕中心
+            camera = new THREE.OrthographicCamera(-canvasW / 2, canvasW / 2, canvasH / 2, -canvasH / 2, -1000, 1000);
+
+            geo = new THREE.BoxGeometry(4, 2, 2);
+
+            document.getElementById('updateBtn').addEventListener('click', updateScene);
+            document.getElementById('saveBtn').addEventListener('click', saveSVG);
+
+            updateScene();
+        }
+
+        // 把一组权重按总长度归一化 (直接移植自 p5)
+        function normalizeToSize(weights, totalSize) {
+            let sum = weights.reduce((a, b) => a + b, 0);
+            return weights.map(w => (w / sum) * totalSize);
+        }
+
+        // 获取每个 cell 的坐标和宽高
+        function getGridRects(cols, rows) {
+            let colWeights = [];
+            let rowWeights = [];
+            const colsPow = parseFloat(document.getElementById('colsPow').value) || 1.5;
+            const rowsPow = parseFloat(document.getElementById('rowsPow').value) || 1.2;
+            for (let i = 0; i < cols; i++) colWeights.push(Math.pow(colsPow, i));
+            for (let j = 0; j < rows; j++) rowWeights.push(Math.pow(rowsPow, j));
+
+            let colWidths = normalizeToSize(colWeights, gridW);
+            let rowHeights = normalizeToSize(rowWeights, gridH);
+
+            // 逐个画格子
+            let rects = [];
+            let y = gridY;
+            for (let j = 0; j < rows; j++) {
+                let x = gridX;
+                for (let i = 0; i < cols; i++) {
+                    // 新增了 rowIndex: j，用来记录这是第几行
+                    rects.push({ x: x, y: y, w: colWidths[i], h: rowHeights[j], colIndex: i, rowIndex: j });
+                    x += colWidths[i];
+                }
+                y += rowHeights[j];
+            }
+            return rects;
+        }
+
+        function drawGridBorder(rect, parentGroup) {
+            const mat = new THREE.LineBasicMaterial({ color: colorParams.cGrid });
+            const pts = [
+                new THREE.Vector3(rect.x - canvasW / 2, -(rect.y - canvasH / 2), 0),
+                new THREE.Vector3(rect.x + rect.w - canvasW / 2, -(rect.y - canvasH / 2), 0),
+                new THREE.Vector3(rect.x + rect.w - canvasW / 2, -(rect.y + rect.h - canvasH / 2), 0),
+                new THREE.Vector3(rect.x - canvasW / 2, -(rect.y + rect.h - canvasH / 2), 0),
+                new THREE.Vector3(rect.x - canvasW / 2, -(rect.y - canvasH / 2), 0)
+            ];
+            const geometry = new THREE.BufferGeometry().setFromPoints(pts);
+            parentGroup.add(new THREE.Line(geometry, mat));
+        }
+
+        function updateScene() {
+            const padding = parseFloat(document.getElementById('paddingInput').value) || 0;
+
+            if (masterGroup) { scene.remove(masterGroup); }
+            masterGroup = new THREE.Group();
+            scene.add(masterGroup);
+
+            const cols = parseInt(document.getElementById('colsInput').value) || 6;
+            const rows = parseInt(document.getElementById('rowsInput').value) || 10;
+
+            const strokePx = parseFloat(document.getElementById('strokeInput').value) || 2;
+            const pitch = parseFloat(document.getElementById('pitchInput').value) || 0;
+            // 将原来的 const pitch = ... 替换为：
+            const pitchStart = parseFloat(document.getElementById('pitchStartInput').value) || 0;
+            const pitchEnd = parseFloat(document.getElementById('pitchEndInput').value) || 0;
+            const yaw = parseFloat(document.getElementById('yawInput').value) || 0;
+            const yawStart = parseFloat(document.getElementById('yawStartInput').value) || 0;
+            const yawEnd = parseFloat(document.getElementById('yawEndInput').value) || 0;
+            const roll = parseFloat(document.getElementById('rollInput').value) || 0;
+
+            const rects = getGridRects(cols, rows);
+
+            // 遍历并生成所有网格内容
+            rects.forEach(rect => {
+                // 1. 画背景框
+                drawGridBorder(rect, masterGroup);
+
+                // 2. 创建承载该框内元素的组
+                const cellGroup = new THREE.Group();
+                masterGroup.add(cellGroup);
+
+                const mat = new THREE.MeshNormalMaterial({ wireframe: true, opacity: 0, transparent: true });
+                const mesh = new THREE.Mesh(geo, mat);
+                const boxHelper = new THREE.BoxHelper(mesh, colorParams.cStroke);
+                boxHelper.matrixAutoUpdate = true;
+                mesh.add(boxHelper);
+                cellGroup.add(mesh);
+
+                // 3. 设置全旋转
+                // 3. 设置全局旋转
+                // 计算当前列的 Yaw 角度（水平渐变）
+                let currentYaw = yawStart;
+                if (cols > 1) {
+                    currentYaw = yawStart + (yawEnd - yawStart) * (rect.colIndex / (cols - 1));
+                }
+
+                // 计算当前行的 Pitch 角度（垂直渐变）
+                let currentPitch = pitchStart;
+                if (rows > 1) {
+                    currentPitch = pitchStart + (pitchEnd - pitchStart) * (rect.rowIndex / (rows - 1));
+                }
+
+                // 把计算出的 currentPitch 和 currentYaw 传进去
+                mesh.rotation.set(deg2rad(currentPitch), deg2rad(currentYaw), deg2rad(roll), 'XYZ');
+                mesh.updateMatrixWorld(true);
+
+                // 4. 根据当前格子的比例计算宽屏/窄屏自适应缩放 (stationary 原逻辑)
+// --- 先计算减去 padding 后的实际可用宽高 ---
+                const targetW = Math.max(0.1, rect.w - padding * 2);
+                const targetH = Math.max(0.1, rect.h - padding * 2);
+
+                // 4. 根据【实际可用区域】的比例计算盒子的拉伸 (解决 Padding 不均匀的核心)
+                const t = targetW / targetH;
+                const R = getAbsR01(mesh);
+                const { hx, denom } = solveHxForWH(t, R);
+                const targetScale = (Math.abs(denom) > 1e-10 && hx > 0) ? hx / 2 : 0.5;
+                mesh.scale.set(targetScale, 1, 1);
+                mesh.updateMatrixWorld(true);
+
+                // 5. 测算变形后的 BoundingBox，并将其等比缩放至撑满可用空间
+                const box3 = new THREE.Box3().setFromObject(mesh);
+                const size = new THREE.Vector3();
+                box3.getSize(size);
+                
+                const scaleX = targetW / size.x;
+                const scaleY = targetH / size.y;
+                // 取两者最小值，此时因为比例已经适配，scaleX 和 scaleY 理论上是非常接近的
+                const scaleF = Math.min(scaleX, scaleY); 
+
+                cellGroup.scale.set(scaleF, scaleF, scaleF);
+
+                // 6. 将当前组平移到 rect 的正中心 (注意 Y 轴正负映射)
+                const cx = rect.x + rect.w / 2;
+                const cy = rect.y + rect.h / 2;
+                cellGroup.position.set(cx - canvasW / 2, -(cy - canvasH / 2), 0);
+                cellGroup.updateMatrixWorld(true);
+
+                // 7. 生成伴随的笔刷条 (Strips)
+                buildStripsForMesh(mesh, strokePx, masterGroup);
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        function buildStripsForMesh(mesh, targetStrokePx, parentGroup) {
+            mesh.updateMatrixWorld(true);
+
+            const v1 = worldVertex(geo, 1, mesh);
+            const v2 = worldVertex(geo, 2, mesh);
+            const v5 = worldVertex(geo, 5, mesh);
+            const v7 = worldVertex(geo, 7, mesh);
+
+            const vMid57 = v5.clone().add(v7).multiplyScalar(0.5);
+            const vS3End = vMid57.clone().lerp(v1, 0.2);
+
+            const axisXWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 0);
+            const axisYWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 1);
+
+            // 此时的世界坐标 1 单位等于屏幕 1 px，直接传入目标像素粗细计算 scale 即可
+            const scaleS1 = getOrthographicScale(v5, v7, axisXWorld, targetStrokePx);
+            const scaleS2 = getOrthographicScale(v1, vMid57, axisYWorld, targetStrokePx);
+            const scaleS3 = getOrthographicScale(v2, vS3End, axisYWorld, targetStrokePx);
+
+            const offsetS1 = axisXWorld.clone().multiplyScalar(scaleS1);
+            const offsetS2 = axisYWorld.clone().multiplyScalar(-scaleS2);
+            const offsetS3 = axisYWorld.clone().multiplyScalar(scaleS3);
+
+            const s1 = makeStrip(v5, v7, offsetS1, matWhiteDS);
+            const s2 = makeStrip(v1, vMid57, offsetS2, matWhiteDS);
+            const s3 = makeCenteredStrip(v2, vS3End, offsetS3, matWhiteDS);
+
+            parentGroup.add(s1, s2, s3);
+        }
+
+        function getOrthographicScale(pStartWorld, pEndWorld, dirWorld, targetHeight) {
+            const dx = pEndWorld.x - pStartWorld.x;
+            const dy = pEndWorld.y - pStartWorld.y;
+            const length2D = Math.sqrt(dx * dx + dy * dy);
+            if (length2D < 0.0001) return 0;
+
+            const cross2D = Math.abs(dx * dirWorld.y - dy * dirWorld.x);
+            if (cross2D < 0.0001) return targetHeight;
+            return (targetHeight * length2D) / cross2D;
+        }
+        function saveSVG() {
+            const svgElement = renderer.domElement;
+            const serializer = new XMLSerializer();
+            let svgString = serializer.serializeToString(svgElement);
+
+            if (!svgString.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
+                svgString = svgString.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+
+            // 获取所有 input 的当前值
+            const c = document.getElementById('colsInput').value;
+            const r = document.getElementById('rowsInput').value;
+            const cp = document.getElementById('colsPow').value;
+            const rp = document.getElementById('rowsPow').value;
+            const s = document.getElementById('strokeInput').value;
+            const p = document.getElementById('pitchInput').value;
+            const y = document.getElementById('yawInput').value;
+            const roll = document.getElementById('rollInput').value;
+
+            // 拼接成完整的文件名，格式例如：grid-c6-r10-cp1.5-rp1.2-s2-p15-y25-roll0.svg
+            const fileName = `grid-c${c}-r${r}-cp${cp}-rp${rp}-s${s}-p${p}-y${y}-roll${roll}.svg`;
+
+            const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = fileName; // 使用拼接好的文件名
+
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }
+        // --- 核心数学与工具函数 ---
+        function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
+        function makeQuad(p0, p1, p2, p3, mat) {
+            const g = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]);
+            g.setIndex([0, 1, 2, 0, 2, 3]);
+            return new THREE.Mesh(g, mat);
+        }
+        function makeStrip(A, B, offset, mat) { return makeQuad(A, B, B.clone().add(offset), A.clone().add(offset), mat); }
+        function makeCenteredStrip(A, B, offset, mat) { return makeQuad(A, A.clone().add(offset), B, B.clone().sub(offset), mat); }
+        function deg2rad(d) { return d * Math.PI / 180; }
+
+        function getAbsR01(o) {
+            const m = new THREE.Matrix4().makeRotationFromQuaternion(o.getWorldQuaternion(new THREE.Quaternion())).elements;
+            return { a00: Math.abs(m[0]), a01: Math.abs(m[4]), a02: Math.abs(m[8]), a10: Math.abs(m[1]), a11: Math.abs(m[5]), a12: Math.abs(m[9]) };
+        }
+
+        function solveHxForWH(t, R) {
+            return {
+                hx: (t * (R.a11 + R.a12) - (R.a01 + R.a02)) / (R.a00 - t * R.a10),
+                denom: (R.a00 - t * R.a10)
+            };
+        }
+    </script>
+</body>
+
+</html>

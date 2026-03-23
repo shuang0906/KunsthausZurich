@@ -7,6 +7,16 @@
     <title>Fluid 3D Broken Grid Gallery (Local DB Version)</title>
     <link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&display=swap" rel="stylesheet">
     <style>
+        @font-face {
+            font-family: 'Diatype Semi Mono';
+            src: url('../assets/font/ABCDiatypeSemi-Mono-Regular-Trial.woff') format('woff'),
+        }
+
+        @font-face {
+            font-family: 'Diatype Mono';
+            src: url('../assets/font/ABCDiatypeMono-Light-Trial.woff') format('woff'),
+        }
+
         /* ==========================================
    1. 默认模式 (白底黑字)
    ========================================== */
@@ -107,15 +117,28 @@
             position: absolute;
             top: calc(100% + 8px);
             left: 0px;
-            font-family: 'Fragment Mono', monospace;
+            font-family: 'Diatype Mono';
             font-size: 10px;
+            line-height: 120%;
             color: var(--fg-color);
             transition: color 0.4s ease;
         }
 
         .is-focused .frame-info {
             top: calc(100% + 10px);
-            font-size: 14px;
+            font-size: 12px;
+        }
+
+        .frame-index-label {
+            position: absolute;
+            top: -15px;
+            left: 0;
+            width: 100%;
+            font-size: 9px;
+            font-family: 'Diatype Mono';
+            pointer-events: none;
+            color: var(--fg-color);
+            transition: color 0.4s ease;
         }
 
         /* 2. WebGL 渲染层 */
@@ -222,6 +245,59 @@
         .mode-switch-btn:hover {
             transform: scale(1.1);
         }
+
+        .custom-cursor {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 20px;
+            /* 圆点大小 */
+            height: 20px;
+            border-radius: 50%;
+            background-color: white;
+            /* 颜色可以根据你的背景调整 */
+            pointer-events: none;
+            /* 🌟 绝对不能删：让点击事件穿透圆点！ */
+            z-index: 99999;
+            /* 保证在最顶层 */
+
+            /* 艺术馆常用高级特效：反色融合 (可选，如果不需要可以删掉) */
+            mix-blend-mode: difference;
+
+            /* 初始居中偏移也会在 JS 里处理，这里先不动 */
+            will-change: transform;
+            /* 开启 GPU 加速防卡顿 */
+        }
+
+        .gallery-backdrop {
+            /* 铺满全屏 */
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+
+            /* 使用变量自动切换颜色 */
+            background-color: var(--bg-color);
+
+            /* 默认隐藏状态 */
+            opacity: 0;
+            pointer-events: none;
+            /* 隐藏时，鼠标可以穿透它点击下面的东西 */
+
+            /* 顺滑过渡动画 */
+            transition: opacity 1s cubic-bezier(0.4, 0, 0.2, 1);
+
+            /* 性能优化 */
+            will-change: opacity;
+        }
+
+        /* 激活状态 */
+        .gallery-backdrop.is-active {
+            opacity: 0.5;
+            pointer-events: auto;
+            cursor: pointer;
+        }
     </style>
 </head>
 
@@ -255,6 +331,8 @@
         </svg>
     </button>
 
+    <div class="custom-cursor"></div>
+
     <script src="/assets/museumDB.js"></script>
 
     <script type="importmap">
@@ -277,6 +355,7 @@
         let focusedItem = null; // 🌟 记录当前被放大的画框
         const matWhiteDS = new THREE.MeshBasicMaterial({ color: 0x000, side: THREE.DoubleSide });
 
+        const backdropEl = document.createElement('div');
         // 预加载所有图片到内存
         sequence.forEach(item => {
             const img = new Image();
@@ -382,57 +461,85 @@
                 };
                 items.push(data);
             });
+            // ==========================================
+            // 🌟 新增：在遍历 items 之前，先创建遮罩层并插入到 body
+            // ==========================================
 
+            backdropEl.className = 'gallery-backdrop';
+            domLayer.appendChild(backdropEl);
+
+            // 封装一个退出焦点的函数，方便复用
+            const closeAllFocus = () => {
+                focusedItem = null;
+                backdropEl.classList.remove('is-active'); // 隐藏背景遮罩
+                items.forEach(i => {
+                    i.dom.classList.remove('is-focused');
+                    const infoEl = i.dom.querySelector('.frame-info');
+                    if (infoEl) infoEl.style.width = ''; // 退出时解除宽度锁定，恢复排版
+                });
+            };
+
+            // 🌟 新增：点击背景遮罩层时，直接退出聚焦状态
+            backdropEl.addEventListener('click', closeAllFocus);
+
+
+            // ==========================================
+            // 原本的遍历与点击逻辑（融入遮罩控制）
+            // ==========================================
             items.forEach((item) => {
                 item.dom.style.cursor = 'pointer';
-                item.dom.addEventListener('click', () => {
 
-                    // 1. 🌟 在切换焦点之前，先把所有画框的缩小状态清空（恢复默认字号）
+                item.dom.addEventListener('click', (e) => {
+                    // 🌟 重要：阻止事件冒泡，防止点击画框时误触到背景的点击事件
+                    e.stopPropagation();
+
+                    const isClosing = (focusedItem === item);
+
+                    // 1. 🌟 在切换焦点之前，先把所有画框的缩小状态清空，并恢复默认宽度
                     items.forEach(i => {
                         i.dom.classList.remove('is-focused');
+                        const el = i.dom.querySelector('.frame-info');
+                        if (el) el.style.width = '';
                     });
 
-                    // 2. 原本的逻辑：如果当前点击的画框已经是放大状态，就取消焦点(null)，否则把焦点给它
-                    focusedItem = (focusedItem === item) ? null : item;
+                    // 2. 切换焦点：如果已经是它，就取消(null)，否则设为它
+                    focusedItem = isClosing ? null : item;
 
                     const infoEl = item.dom.querySelector('.frame-info');
 
-                    // 3. 🌟 如果现在有聚焦的画框，就给它单独加上缩小的类名
+                    // 3. 🌟 根据状态更新画框和遮罩层
                     if (focusedItem) {
                         focusedItem.dom.classList.add('is-focused');
+
+                        backdropEl.classList.add('is-active'); // 🌟 显示遮罩层
+
                         if (infoEl) {
                             // ==========================================
                             // 🌟 纯 2D 降维打击：直接用屏幕像素算，绕开 frustumW！
                             // ==========================================
-
-                            // A. 拿到屏幕宽和高的最小值
                             const minScreenEdge = Math.min(window.innerWidth, window.innerHeight);
-
-                            // B. 对应你代码里的 0.8 比例，算出放大后的最大像素边界
                             const maxTargetPixels = minScreenEdge * 0.8;
 
-                            // C. 拿到图片的宽高比
                             let imgRatio = 1;
                             if (item.img && item.img.naturalWidth > 0) {
                                 imgRatio = item.img.naturalWidth / item.img.naturalHeight;
                             }
 
-                            // D. 极简推导：如果是横图，最终宽度就是边界值；如果是竖图，最终宽度就是 边界值 * 比例
                             const finalPixelW = (imgRatio >= 1) ? maxTargetPixels : (maxTargetPixels * imgRatio);
-
-                            // E. 算一下我们现在有多大，算出初始缩放比例 (给 CSS 动画用)
-                            // 减去 20 是因为你 DOM 追踪逻辑里写了 padding = 20
                             const currentPixelW = item.dom.offsetWidth - 20;
                             const startScale = currentPixelW / finalPixelW;
 
-                            // F. 锁定最终宽度，并把初始比例传给 CSS
+                            // 锁定最终宽度
                             infoEl.style.width = finalPixelW + 'px';
+                            // 如果你之前在用 JS 每一帧算 scale，需要保留下面这行供 render 循环使用：
+                            item.textStartScale = startScale;
                         }
+                    } else {
+                        // 🌟 如果取消了焦点，隐藏遮罩层
+                        backdropEl.classList.remove('is-active');
                     }
-
                 });
             });
-
             const modeBtn = document.getElementById('modeSwitcher');
 
             if (modeBtn) {
@@ -679,6 +786,12 @@
 
                 item.dom.style.zIndex = strictZIndexBase;
                 item.canvas.style.zIndex = strictZIndexBase + 1;
+
+                if (item === focusedItem) {
+                    // 聚焦画框是 80，遮罩层就是 79。
+                    // 而其他最前面的普通画框最多只有 70，完美隔开！
+                    backdropEl.style.zIndex = strictZIndexBase - 1;
+                }
             });
 
             // 🌟 第二步：分层独立渲染！
@@ -756,44 +869,37 @@
                 // 2. 🌟 核心魔法：把它们装进数组，过滤掉不存在的值，最后用 ", " 完美串联
                 item.label.innerText = [artist, title, year].filter(Boolean).join(', ');
                 item.lastImageName = chosenArt.name;
+
+                // ==========================================
+                // 🌟 新增：动态更新顶部的 [当前编号 / 总数] 标签
+                // ==========================================
+                // A. 在原始的 sequence 数组中反查出这个作品的真实原始索引
+                const originalIndex = sequence.findIndex(art => art.name === chosenArt.name);
+
+                // 索引从 0 开始所以要 +1。防爆处理：万一没找到就用 1
+                const currentNumber = originalIndex !== -1 ? (originalIndex + 1) : 1;
+                const totalCount = sequence.length;
+
+                // B. 找一下画框里有没有这个标签 DOM，如果没有就现场造一个
+                let indexLabelEl = item.dom.querySelector('.frame-index-label');
+                if (!indexLabelEl) {
+                    indexLabelEl = document.createElement('div');
+                    indexLabelEl.className = 'frame-index-label';
+                    item.dom.appendChild(indexLabelEl); // 塞到画框 DOM 里
+                }
+
+                // C. 强迫症排版福利：根据总数的位数自动补零！
+                // 比如总数是 500 (3位数)，那么 4 就变成 004，45 就变成 045
+                const padLen = String(totalCount).length;
+                const formattedNum = String(currentNumber).padStart(padLen, '0');
+
+                // D. 写入标签内容
+                indexLabelEl.innerText = `[${formattedNum} / ${totalCount}]`;
             }
 
 
             lockFrameInfoWidths();
 
-        }
-
-        // ⏱️ 智能匹配：寻找数据库中最相似的画作 (已更新为你的逻辑)
-        function startMatchingTimer(interval_ms) {
-            setInterval(() => {
-                if (sequence.length === 0) return; // 数据库未加载时不执行
-
-                items.forEach((item) => {
-                    let closestArt = sequence[0];
-                    let minDiff = Math.abs(closestArt.ratioVal - item.currentRatio);
-
-                    for (let i = 1; i < sequence.length; i++) {
-                        const diff = Math.abs(sequence[i].ratioVal - item.currentRatio);
-                        if (diff < minDiff) {
-                            minDiff = diff;
-                            closestArt = sequence[i];
-                        }
-                    }
-
-                    // 比较 name 来避免重复加载
-                    if (closestArt.name !== item.lastImageName) {
-                        // 直接替换图片和文字，没有任何延迟
-                        item.img.src = loadedImages[closestArt.name] ? loadedImages[closestArt.name].src : (imageFolderPath + closestArt.name);
-                        item.label.innerText = closestArt.title || closestArt.name;
-
-                        item.lastImageName = closestArt.name;
-                    }
-
-
-                    lockFrameInfoWidths();
-
-                });
-            }, interval_ms);
         }
 
         // 🎨 辅助绘图逻辑
@@ -893,6 +999,42 @@
             const m = new THREE.Matrix4().makeRotationFromQuaternion(o.getWorldQuaternion(new THREE.Quaternion())).elements;
             return { a00: Math.abs(m[0]), a01: Math.abs(m[4]), a10: Math.abs(m[1]), a11: Math.abs(m[5]) };
         }
+
+        // ==========================================
+        // 艺术馆级：鼠标平滑跟随效果
+        // ==========================================
+        const cursorEl = document.querySelector('.custom-cursor');
+
+        // 鼠标真实的物理位置
+        let targetMouseX = window.innerWidth / 2;
+        let targetMouseY = window.innerHeight / 2;
+
+        // 圆点当前所在的位置（通过缓动逐渐靠近真实位置）
+        let currentCursorX = window.innerWidth / 2;
+        let currentCursorY = window.innerHeight / 2;
+
+        // 1. 监听真实的鼠标移动
+        window.addEventListener('mousemove', (e) => {
+            targetMouseX = e.clientX;
+            targetMouseY = e.clientY;
+        });
+
+        // 2. 独立的小渲染循环（也可以合并到你 Three.js 的循环里）
+        function updateCursor() {
+            // 🌟 熟悉的配方：缓动系数 ease (0.15 比较顺滑，值越小延迟感越重)
+            const ease = 0.2;
+
+            currentCursorX += (targetMouseX - currentCursorX) * ease;
+            currentCursorY += (targetMouseY - currentCursorY) * ease;
+
+            // 🌟 优化：用 translate3d 开启硬件加速，减去宽高的那一半让圆心对准鼠标尖端
+            cursorEl.style.transform = `translate3d(${currentCursorX - 12}px, ${currentCursorY - 12}px, 0)`;
+
+            requestAnimationFrame(updateCursor);
+        }
+
+        // 启动循环
+        updateCursor();
 
         init();
     </script>

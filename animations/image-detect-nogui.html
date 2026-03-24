@@ -8,7 +8,6 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="../style.css">
     <style>
         svg {
             background-color: transparent !important;
@@ -23,18 +22,23 @@
             margin: 0;
             padding: 0;
             overflow: hidden;
-            /* 防止出现滚动条导致计算偏移 */
+            /* 设定深色背景方便你看清 1300px 的边界 */
+            background-color: #333;
         }
 
         #container {
             position: relative;
-            width: 100vw;
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            /* 水平居中 */
-            align-items: center;
-            /* 垂直居中 */
+            /* 容器大小跟随画布设定为 1300px */
+            width: 1300px;
+            height: 1300px;
+            /* 如果屏幕较小，可以通过 scale 缩放预览，这里保持居中原尺寸显示 */
+            transform-origin: top left;
+            background-image: url('../assets/images/5K-SystemBg1.jpg');
+
+            /* 确保图片铺满 2600px 画布 */
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
         }
 
         #bgCanvas,
@@ -42,19 +46,26 @@
             position: absolute;
             top: 0;
             left: 0;
-            width: 100%;
-            /* CSS 宽度 */
-            height: 100%;
-            /* CSS 高度 */
+            width: 1300px;
+            height: 1300px;
+        }
+
+        .center-dot {
+            width: 9px;
+            height: 9px;
+            background-color: #000000; 
+            border-radius: 50%;
         }
     </style>
 </head>
 
 <body>
-    <div id="container" style="position: relative; width: 100vw; height: 100vh;">
-<div id="recordUI" style="position: absolute; bottom: 30px; left: 30px; z-index: 999;">
-        <button id="btnAutoRecord" style="padding: 10px 20px; font-family: 'Fragment Mono', monospace; cursor: pointer; background: #000; color: #fff; border: none; border-radius: 4px; transition: 0.3s;">⏺ Auto Record 1 Loop</button>
-    </div>
+    <div id="container">
+        <div id="recordUI" style="position: fixed; bottom: 30px; left: 30px; z-index: 999;">
+            <button id="btnAutoRecord"
+                style="padding: 10px 20px; font-family: 'Fragment Mono', monospace; cursor: pointer; background: #000; color: #fff; border: none; border-radius: 4px; transition: 0.3s; font-size: 16px;">⏺
+                Auto Record 1 Loop</button>
+        </div>
         <canvas id="bgCanvas" style="position: absolute; top: 0; left: 0; z-index: 1;"></canvas>
         <canvas id="rendererCanvas" style="position: absolute; top: 0; left: 0; z-index: 2;"></canvas>
     </div>
@@ -71,6 +82,17 @@
     <script type="module">
 
         import * as THREE from 'three';
+        import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
+
+        import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+        import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+        import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+        // ==========================================
+        // 全局固定尺寸设置
+        // ==========================================
+        const CANVAS_SIZE = 1300;
 
         // ==========================================
         // 核心控制参数
@@ -86,14 +108,14 @@
         const sequence = [
             { ratio: "1:1", w: 400, h: 400 },
             { ratio: "1:1", w: 400, h: 400 },
-            { ratio: "3:4", w: 400, h: 533.33 },
+            { ratio: "3:4", w: 600, h: 800 },
             { ratio: "3:2", w: 600, h: 400 },
-            { ratio: "16:9", w: 600, h: 337.5 },
+            { ratio: "16:9", w: 800, h: 450 },
         ];
         let currentIdx = 0;
 
         const boxParams = {
-            kStroke: 0.15,
+            strokePx: 30,
             showBoxHelper: true
         };
 
@@ -106,17 +128,24 @@
         // ==========================================
         let renderer, scene, camera, mesh, boxHelper, kGroup;
         let geo;
+        let centerDot, centerDot2, labelRenderer;
         let prevW = 400; // 初始化为你的默认宽度
         let prevH = 400; // 初始化为你的默认高度
         let currentAnimId = null;
         const frustumHeight = 8;
         let prevIdx = 0;
-        const matWhiteDS = new THREE.MeshBasicMaterial({ color: colorParams.cStroke, side: THREE.DoubleSide });
+        const matWhiteDS = new THREE.MeshBasicMaterial({
+            color: 0xcccccc,
+            side: THREE.DoubleSide,
+            polygonOffset: true,
+            polygonOffsetFactor: -2,
+            polygonOffsetUnits: -2
+        });
 
         const animationModes = {
             smooth: { duration: 1000, interval: "2000" },
             snappy: { duration: 800, interval: "1000" }
-        }; 0
+        };
 
         let currentMode = 'smooth'; // 默认模式
         const mode = animationModes[currentMode];
@@ -129,25 +158,43 @@
 
         function init() {
             // Renderer
-
             const canvasElement = document.getElementById('rendererCanvas');
 
-            // 在创建渲染器时传入
             renderer = new THREE.WebGLRenderer({
-                canvas: canvasElement, // 关键：指定画布
-                antialias: true,       // 抗锯齿
-                alpha: true    ,        // 如果你需要背景 Canvas 透出来，这个一定要设为 true
+                canvas: canvasElement,
+                antialias: true,
+                alpha: true,
                 preserveDrawingBuffer: true
             });
 
-            // renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
+            renderer.setSize(CANVAS_SIZE, CANVAS_SIZE);
+
+            //svg render
+            // renderer = new SVGRenderer();
+            // renderer.setSize(1300, 1300); // 维持你的高分辨率
+            // renderer.domElement.style.position = 'absolute';
+            // renderer.domElement.style.top = '0px';
+            // renderer.domElement.style.left = '0px';
+            // renderer.domElement.style.zIndex = '10'; // 设定一个比 bgCanvas 更高的层级
+
+            const container = document.getElementById('container');
+            container.appendChild(renderer.domElement);
+
+            // ==========================================
+            // 初始化 CSS2D 渲染器 (用于渲染 HTML 元素)
+            // ==========================================
+            labelRenderer = new CSS2DRenderer();
+            labelRenderer.setSize(1300, 1300);
+            labelRenderer.domElement.style.position = 'absolute';
+            labelRenderer.domElement.style.top = '0px';
+            labelRenderer.domElement.style.pointerEvents = 'none';
+            labelRenderer.domElement.style.zIndex = "999";
+            container.appendChild(labelRenderer.domElement);
 
             // Scene & Camera
             scene = new THREE.Scene();
-            const aspect = window.innerWidth / window.innerHeight;
+            const aspect = 1; // 1300 / 1300 恒为 1
             camera = new THREE.OrthographicCamera(
                 -frustumHeight * aspect / 2, frustumHeight * aspect / 2,
                 frustumHeight / 2, -frustumHeight / 2,
@@ -160,7 +207,6 @@
             mesh = new THREE.Mesh(geo, mat);
             scene.add(mesh);
 
-            // --- 新增：关联 BoxHelper ---
             let box = new THREE.BoxHelper(mesh, colorParams.cStroke);
             mesh.add(box);
 
@@ -168,27 +214,54 @@
             const worldBox = new THREE.Box3().setFromObject(mesh);
             boxHelper = new THREE.Box3Helper(worldBox, 0x00ff00);
             boxHelper.visible = boxParams.showBoxHelper;
-            // scene.add(boxHelper);
 
-            window.addEventListener('resize', onWindowResize);
+            // 这里移除了原本会打乱尺寸的 window resize 事件监听器
+            // window.addEventListener('resize', onWindowResize);
+
+            // ==========================================
+            // 全局创建 CSS2D 黑点 (避免重复创建导致内存泄漏)
+            // ==========================================
+// ==========================================
+// 第 1 个点 (给 S2 用的)
+// ==========================================
+const containerDiv1 = document.createElement('div');
+const dotDiv1 = document.createElement('div');
+dotDiv1.classList.add('center-dot'); 
+containerDiv1.appendChild(dotDiv1);
+centerDot = new CSS2DObject(containerDiv1);
+
+// ==========================================
+// 💡 第 2 个点 (给 S3 用的)
+// ==========================================
+const containerDiv2 = document.createElement('div');
+const dotDiv2 = document.createElement('div');
+// 复用同一个 class，样式完全一样！
+dotDiv2.classList.add('center-dot'); 
+containerDiv2.appendChild(dotDiv2);
+centerDot2 = new CSS2DObject(containerDiv2);
+
+            centerDot = new CSS2DObject(dotDiv1);
+
+            // 如果每次 rebuildStrips 会清空 kGroup，建议直接把点加到 scene 里
+            kGroup = new THREE.Group();
+            scene.add(kGroup);
+            kGroup.add(centerDot);
+
+
             applyAndSolve();
             startAutoLoop();
         }
 
-
         function applyAndSolve() {
             const config = sequence[currentIdx];
 
-            // 【关键】：把上一次的目标作为本次的起点
             const startW = prevW;
             const startH = prevH;
 
-            // 现在更新全局变量，供下一轮使用
             AABBParams.targetRatio = config.ratio;
             AABBParams.targetW = config.w;
             AABBParams.targetH = config.h;
 
-            // 更新 prev 供下一次 applyAndSolve 使用
             prevW = config.w;
             prevH = config.h;
 
@@ -198,7 +271,6 @@
             const t = parseRatio(AABBParams.targetRatio);
             if (!isFinite(t) || t <= 0) return;
 
-            // 1. 设置目标旋转并计算目标 Scale
             const targetRot = new THREE.Euler(deg2rad(AABBParams.pitch), deg2rad(AABBParams.yaw), 0, 'XYZ');
             const tempMesh = new THREE.Mesh(geo, new THREE.MeshNormalMaterial());
             tempMesh.rotation.copy(targetRot);
@@ -208,18 +280,13 @@
             const { hx, denom } = solveHxForWH(t, R);
             const targetScale = (Math.abs(denom) > 1e-10 && hx > 0) ? hx / 2 : 0.5;
 
-            // 2. 准备动画参数
             const startQuaternion = mesh.quaternion.clone();
             const targetQuaternion = new THREE.Quaternion().setFromEuler(targetRot);
             const startScale = mesh.scale.x;
-            const startZoom = camera.zoom;
 
-            // 计算目标缩放以适配画面
             mesh.scale.set(targetScale, 1, 1);
             mesh.updateMatrixWorld(true);
-            const targetZoom = calculateTargetZoom(new THREE.Box3().setFromObject(mesh), config.w, config.h);
 
-            // 3. 开始平滑动画
             if (currentAnimId) cancelAnimationFrame(currentAnimId);
             const startTime = performance.now();
 
@@ -227,33 +294,25 @@
                 const progress = Math.min((now - startTime) / duration, 1);
                 const ease = 1 - Math.pow(1 - progress, 4);
 
-                // 1. 旋转与缩放插值
                 mesh.quaternion.copy(startQuaternion).slerp(targetQuaternion, ease);
                 mesh.scale.set(startScale + (targetScale - startScale) * ease, 1, 1);
 
-                // 2. 【关键修正】：每一帧更新世界矩阵后，重新计算适配该姿态的 Zoom
                 mesh.updateMatrixWorld(true);
                 const currentWorldBox = new THREE.Box3().setFromObject(mesh);
-
-                // 使用之前的逻辑计算当前姿态下的最优 Zoom
 
                 const currentW = startW + (targetW - startW) * ease;
                 const currentH = startH + (targetH - startH) * ease;
                 updateBackgroundCanvas(currentW, currentH);
 
-                // 2. 传入插值后的尺寸到 Zoom 计算函数
-                // 注意：需要修改 calculateTargetZoom 让其接收 w 和 h 作为参数
                 const currentTargetZoom = calculateTargetZoom(currentWorldBox, currentW, currentH);
-                // 3. 应用 Zoom (这里可以对 Zoom 也做线性插值，或者直接应用计算出的值)
                 camera.zoom = currentTargetZoom;
                 camera.updateProjectionMatrix();
 
-                // 4. 更新辅助线
                 boxHelper.box.setFromObject(mesh);
 
-                // 5. 重建笔触并渲染
                 rebuildStrips();
                 renderer.render(scene, camera);
+                labelRenderer.render(scene, camera);
 
                 if (progress < 1) currentAnimId = requestAnimationFrame(animate);
             }
@@ -261,28 +320,21 @@
         }
 
         function randomExclude(min, max, absMin, absMax) {
-            // 随机决定是正区间还是负区间
             const sign = Math.random() > 0.3 ? 1 : -1;
-            // 在 [absMin, absMax] 范围内取值
             const val = (Math.random() * (absMax - absMin)) + absMin;
             return val * sign;
         }
-        // 自动循环：改为随机生成参数并触发
+
         function startAutoLoop() {
             setInterval(() => {
-                // 切换索引
                 prevIdx = currentIdx;
-                currentIdx = (currentIdx + 1) % sequence.length; // 1. 先更新索引
-                const config = sequence[currentIdx];             // 2. 再获取这个新索引下的配置
+                currentIdx = (currentIdx + 1) % sequence.length;
+                const config = sequence[currentIdx];
 
-// ======== 【新增：自动录屏触发器】 ========
-                // 选用 1 作为起点，意味着从最初始的 1:1 状态刚开始向下一个状态变形时开录
                 if (currentIdx === 1) {
                     if (isRecordingLoop) {
-                        // 已经录了一整圈，回到起点，停止！
                         stopRecording();
                     } else if (isWaitingForLoop) {
-                        // 等到了起点，立刻开录！
                         isWaitingForLoop = false;
                         startRecording();
                     }
@@ -296,32 +348,20 @@
                     pitch = 15;
                 } else {
                     if (currentMode === 'smooth') {
-
                         yaw = randomExclude(10, 30, 10, 30);
                         pitch = randomExclude(10, 30, 10, 30);
                         if (isPortraitOrSquare && yaw > 0) {
-                            // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
                             pitch = -Math.abs(pitch);
                         } else if (!isPortraitOrSquare && yaw > 0) {
-                            // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
                             pitch = Math.abs(pitch);
                         }
-                        // 3. 赋值给参数
-                        AABBParams.yaw = yaw;
-                        AABBParams.pitch = pitch;
                     } else {
-
                         yaw = randomExclude(10, 20, 10, 20);
                         if (isPortraitOrSquare && yaw > 0) {
-                            // 如果是竖屏且 yaw 为正，强行将 pitch 置为负数
                             pitch = -15;
                         } else if (!isPortraitOrSquare && yaw > 0) {
-                            // 如果是横屏且 yaw 为正，强行将 pitch 置为正数
                             pitch = 15;
-
                         }
-                        // 非平滑模式直接使用预设的角度
-
                     }
                 }
                 AABBParams.yaw = yaw;
@@ -330,29 +370,66 @@
             }, interval);
         }
 
-        // 改为接收动态尺寸参数
         function calculateTargetZoom(worldBox, w, h) {
             const size = new THREE.Vector3();
             worldBox.getSize(size);
-            console.log(`当前物体世界尺寸: ${size.x.toFixed(2)} x ${size.y.toFixed(2)}`);
 
-            const aspect = window.innerWidth / window.innerHeight;
+            const aspect = 1; // 严格锁定 1300:1300
             const frustumW = frustumHeight * aspect;
 
-            // 使用传入的 w 和 h 而不是 AABBParams 中的全局变量
-            const zoomW = (w / window.innerWidth) * frustumW / size.x;
-            const zoomH = (h / window.innerHeight) * frustumHeight / size.y;
+            // 修改点：用 CANVAS_SIZE 替代 window.innerWidth/Height 保证像素严格对应
+            const zoomW = (w / CANVAS_SIZE) * frustumW / size.x;
+            const zoomH = (h / CANVAS_SIZE) * frustumHeight / size.y;
 
             return Math.min(zoomW, zoomH) * 0.9;
         }
 
         // ==========================================
-        // 笔触与辅助函数
+        // 新增：2D 投影线宽补偿计算
         // ==========================================
+        function getOrthographicScale(pStartWorld, pEndWorld, dirWorld, targetHeight) {
+            const dx = pEndWorld.x - pStartWorld.x;
+            const dy = pEndWorld.y - pStartWorld.y;
+            const length2D = Math.sqrt(dx * dx + dy * dy);
+
+            if (length2D < 0.0001) return 0;
+
+            const cross2D = Math.abs(dx * dirWorld.y - dy * dirWorld.x);
+            if (cross2D < 0.0001) return targetHeight;
+
+            return (targetHeight * length2D) / cross2D;
+        }
+
+// ==========================================
+            // 💡 辅助函数：计算 S2 撞上 S1 时的精确 lerp 比例 (t值)
+            // ==========================================
+            function getExactLerpValue(p1, p2, p3, p4) {
+                // p1, p2 是 S1 (目标线)
+                // p3, p4 是 S2 (我们要 lerp 的线)
+                const d1 = p2.clone().sub(p1);
+                const d2 = p4.clone().sub(p3);
+                const w = p1.clone().sub(p3);
+
+                const a = d1.dot(d1);
+                const b = d1.dot(d2);
+                const c = d2.dot(d2);
+                const d = d1.dot(w);
+                const e = d2.dot(w);
+
+                const D = a * c - b * b; 
+
+                // 如果两线平行，防报错，直接返回 1.0 (画到头)
+                if (D < 0.00001) return 1.0; 
+
+                // 核心：计算在 Line 2 (S2) 上的相交比例 t
+                const t = (a * e - b * d) / D;
+                
+                return t;
+            }
+
         function rebuildStrips() {
             if (!geo || !mesh) return;
-            if (!kGroup) { kGroup = new THREE.Group(); scene.add(kGroup); }
-
+            // 1. 清理旧网格
             while (kGroup.children.length > 0) {
                 const m = kGroup.children[0];
                 if (m.geometry) m.geometry.dispose();
@@ -361,26 +438,207 @@
 
             mesh.updateMatrixWorld(true);
 
-            // 【核心修正】：
-            // 1. pxSize 是每个像素对应的世界单位
-            // 2. 我们需要一个基准 zoom (例如 1.0)，在基准下 stroke 就是 kStroke
-            // 3. 当 zoom 变大时，需要除以 zoom 来抵消缩放对视觉宽度的影响
-            const baseZoom = 1.0;
-            const absoluteStroke = boxParams.kStroke * (baseZoom / camera.zoom);
+            // 2. 恒定线宽与相机投影基准计算
+            const safeZoom = camera.zoom || 1;
+            const absoluteStroke = (boxParams.strokePx * frustumHeight) / (2600 * safeZoom);
 
-            const qWorld = new THREE.Quaternion();
-            mesh.getWorldQuaternion(qWorld);
+            const v1 = worldVertex(geo, 1, mesh);
+            const v2 = worldVertex(geo, 2, mesh);
+            const v5 = worldVertex(geo, 5, mesh);
+            const v7 = worldVertex(geo, 7, mesh);
 
-            // 获取旋转轴向量
-            const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
-            const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(qWorld).multiplyScalar(absoluteStroke);
+            const vMid57 = v5.clone().add(v7).multiplyScalar(0.5);
+            const vS3End = vMid57.clone().lerp(v1, 0.2);
 
-            // ... 后续构建 Strip 的代码保持不变 ...
-            const s1 = makeStrip(worldVertex(geo, 5, mesh), worldVertex(geo, 7, mesh), axisX, matWhiteDS);
-            const s2 = makeStrip(worldVertex(geo, 1, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5), axisY.clone().negate(), matWhiteDS);
-            const s3 = makeCenteredStrip(worldVertex(geo, 2, mesh), worldVertex(geo, 5, mesh).add(worldVertex(geo, 7, mesh)).multiplyScalar(0.5).lerp(worldVertex(geo, 1, mesh), 0.2), axisY, matWhiteDS);
+            const axisXWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 0);
+            const axisYWorld = new THREE.Vector3().setFromMatrixColumn(mesh.matrixWorld, 1);
+
+            let scaleS1 = getOrthographicScale(v5, v7, axisXWorld, absoluteStroke);
+            let scaleS2 = getOrthographicScale(v1, vMid57, axisYWorld, absoluteStroke);
+            let scaleS3 = getOrthographicScale(v2, vS3End, axisYWorld, absoluteStroke);
+
+            // ==========================================
+            // 【移植】：防爆保护机制 (Anti-Explosion)
+            // ==========================================
+            const MULTIPLIER_S1 = 4;
+            const MULTIPLIER_S2 = 4;
+            const MULTIPLIER_S3 = 4;
+
+            function applyAntiExplosion(scale, multiplier) {
+                const limit = absoluteStroke * multiplier;
+                if (!Number.isFinite(scale) || Math.abs(scale) > limit) {
+                    return limit;
+                }
+                return Math.abs(scale);
+            }
+
+            scaleS1 = applyAntiExplosion(scaleS1, MULTIPLIER_S1);
+            scaleS2 = applyAntiExplosion(scaleS2, MULTIPLIER_S2);
+            scaleS3 = applyAntiExplosion(scaleS3, MULTIPLIER_S3);
+
+            // 3. 生成基础条带
+            const offsetS1 = axisXWorld.clone().multiplyScalar(scaleS1);
+            const offsetS2 = axisYWorld.clone().multiplyScalar(-scaleS2);
+            const offsetS3 = axisYWorld.clone().multiplyScalar(scaleS3);
+
+            const s1 = makeStrip(v5, v7, offsetS1, matWhiteDS);
+            const s2 = makeStrip(v1, vMid57, offsetS2, matWhiteDS);
+            const s3 = makeCenteredStrip(v2, vS3End, offsetS3, matWhiteDS);
 
             kGroup.add(s1, s2, s3);
+            // ==========================================
+            // 💡 新增：生成外扩描边的方法
+            // ==========================================
+            const outlineMat = new LineMaterial({
+                color: 0x000000, // 描边颜色：黑色
+                linewidth: 4,    // 描边粗细！(因为有一半会被白色遮挡，所以实际看到的轮廓宽度是这里的一半，即 4px)
+                resolution: new THREE.Vector2(2600, 2600),
+                depthTest: false,  // 无视 3D 空间的前后关系
+                depthWrite: false,
+                polygonOffset: true,
+                polygonOffsetFactor: 2,
+                polygonOffsetUnits: 2
+            });
+
+            function attachOutline(targetMesh) {
+                const edges = new THREE.EdgesGeometry(targetMesh.geometry);
+                const lineGeo = new LineSegmentsGeometry().fromEdgesGeometry(edges);
+
+                const outlineLine = new LineSegments2(lineGeo, outlineMat);
+                outlineLine.renderOrder = 0; // 层级低，最先被画在底层
+                targetMesh.renderOrder = 1;  // 层级高，后画，盖在黑线上面
+
+                targetMesh.add(outlineLine); // 直接把黑线绑定到白色面上
+            }
+
+            // 给三根条带加上描边
+            attachOutline(s1);
+            attachOutline(s2);
+            attachOutline(s3);
+            // ==========================================
+            // 【移植】：动态补丁 (Patch) 逻辑
+            // ==========================================
+
+            // 映射原代码的 rotParams (在现有代码中对应 AABBParams 的 yaw 和 pitch)
+            const rotY = Math.abs(AABBParams.yaw);
+            const rotX = AABBParams.pitch;
+
+            // 判断角度是否处于需要生成补丁的区间
+            if (
+                (rotY < 30 || rotY > 60) &&
+                (rotX < 60 && rotX > -40)
+            ) {
+                // 获取相机的观察方向
+                const viewDir = new THREE.Vector3();
+                camera.getWorldDirection(viewDir);
+
+                // 计算 X 轴旋转压制系数 (Dampening)
+                const dotY = Math.abs(viewDir.dot(axisYWorld));
+                const dampeningX = Math.max(0, 1.0 - dotY);
+
+                // 定义补丁长度的极值区间
+                const minPatchLen = 0;
+                const maxPatchLen = -0.35; // 与附件中的极值保持一致
+
+                const maxSafeScale = absoluteStroke * 3;
+                let t = (scaleS3 - absoluteStroke) / (maxSafeScale - absoluteStroke);
+                t = Math.max(0, Math.min(1, t));
+
+                // 终极制衡：根据压制系数计算最终延伸长度
+                const final_t = t * dampeningX;
+                const patchExtendLength = minPatchLen + final_t * (maxPatchLen - minPatchLen);
+
+                // 映射原本的底层端点 
+                // 由于新逻辑使用的是 makeCenteredStrip(A, B, offset)，底部端点分别为 B 和 B-offset
+                const s3_p3 = vS3End;
+                const s3_p4 = vS3End.clone().sub(offsetS3);
+                const s3_p1 = v2;
+
+                // 计算延伸方向并建立手工顶点
+                const edgeDirection = s3_p1.clone().sub(s3_p4).normalize();
+                const vManualPoint = s3_p4.clone().add(edgeDirection.multiplyScalar(patchExtendLength));
+
+                // 组装补丁三角形
+                const vertices_Float32 = new Float32Array([
+                    vManualPoint.x, vManualPoint.y, vManualPoint.z,
+                    s3_p4.x, s3_p4.y, s3_p4.z,
+                    s3_p3.x, s3_p3.y, s3_p3.z,
+                ]);
+
+                const geometry_Patch = new THREE.BufferGeometry();
+                geometry_Patch.setAttribute('position', new THREE.BufferAttribute(vertices_Float32, 3));
+
+                // 复用全局的粗体黑线材质 (matWhiteDS 其实内部读取的色值是 colorParams.cStroke)
+                const patchMesh = new THREE.Mesh(geometry_Patch, matWhiteDS);
+
+                kGroup.add(patchMesh);
+                attachOutline(patchMesh);
+            }
+
+            // ==========================================
+            // 💡 新增：计算并生成 3 条中线 (Centerlines)
+            // ==========================================
+
+            // 1. 定义中线材质
+            const centerlineMat = new LineMaterial({
+                color: 0x000, // 中线颜色
+                linewidth: 3,    // 中线粗细：设定为 2px
+                resolution: new THREE.Vector2(2600, 2600),
+                depthTest: false, // 同样关闭深度测试
+                depthWrite: false
+            });
+
+            // 2. 根据生成 Strip 的偏移逻辑，推导中线的真实端点
+            // S1 (普通 strip：向一侧平移)
+            const c1Start = v5.clone().add(offsetS1.clone().multiplyScalar(0.5));
+            const c1End = v7.clone().add(offsetS1.clone().multiplyScalar(0.5));
+
+            // S2 (普通 strip：向一侧平移)
+            const c2Start = v1.clone().add(offsetS2.clone().multiplyScalar(0.5));
+
+            // 先算出原本画到头的绝对终点
+            const c2EndFull = vMid57.clone().add(offsetS2.clone().multiplyScalar(0.5));
+
+            // 💡 核心修改：使用 lerp 沿着自身方向往回缩
+            // 0.85 表示只画到整条线段 85% 的位置。
+            // 你可以随意把 0.85 改成 0.8（缩得更多）或者 0.9（缩得少一点），只要能被圆点盖住就行。
+            const exactLerp = getExactLerpValue(c1Start, c1End, c2Start, c2EndFull);
+
+            let lerpFactor;
+            if (AABBParams.pitch < 0 && AABBParams.yaw > 0){
+                lerpFactor =  0.98;
+            } else {
+                lerpFactor =  0.994;
+            }
+            const c2End = c2Start.clone().lerp(c2EndFull, exactLerp*lerpFactor);
+
+            centerDot.position.copy(c2End);
+            kGroup.add(centerDot);
+
+            // S3 (居中 strip：一头加一头减)
+            const c3Start = v2.clone().add(offsetS3.clone().multiplyScalar(0.5));
+            const c3End = vS3End.clone().sub(offsetS3.clone().multiplyScalar(0.5));
+
+            centerDot2.position.copy(c3End);
+            kGroup.add(centerDot2);
+
+            // 3. 生成线条的辅助函数
+            function addCenterline(p1, p2) {
+                const lineGeo = new LineSegmentsGeometry();
+                // 填入两点的 XYZ 坐标
+                lineGeo.setPositions([p1.x, p1.y, p1.z, p2.x, p2.y, p2.z]);
+                const centerLine = new LineSegments2(lineGeo, centerlineMat);
+
+                // 💡 极其关键：分配最高的渲染层级，盖在白面之上
+                centerLine.renderOrder = 2;
+
+                kGroup.add(centerLine);
+            }
+
+            // 4. 将三条中线加入场景
+            addCenterline(c1Start, c1End);
+            addCenterline(c2Start, c2End);
+            addCenterline(c3Start, c3End);
         }
 
         function worldVertex(g, i, m) { return new THREE.Vector3().fromBufferAttribute(g.attributes.position, i).applyMatrix4(m.matrixWorld); }
@@ -398,28 +656,18 @@
             return { a00: Math.abs(m[0]), a01: Math.abs(m[4]), a02: Math.abs(m[8]), a10: Math.abs(m[1]), a11: Math.abs(m[5]), a12: Math.abs(m[9]) };
         }
         function solveHxForWH(t, R) { return { hx: (t * (R.a11 + R.a12) - (R.a01 + R.a02)) / (R.a00 - t * R.a10), denom: (R.a00 - t * R.a10) }; }
-        function onWindowResize() {
-            const aspect = window.innerWidth / window.innerHeight;
-            camera.left = -frustumHeight * aspect / 2;
-            camera.right = frustumHeight * aspect / 2;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.render(scene, camera);
-        }
 
         function updateCameraZoom(worldBox) {
             const size = new THREE.Vector3();
-            worldBox.getSize(size); // 获取世界坐标下的物体尺寸
+            worldBox.getSize(size);
 
-            // 获取当前视口宽高比
-            const aspect = window.innerWidth / window.innerHeight;
+            const aspect = 1;
             const frustumW = frustumHeight * aspect;
 
-            // 计算缩放：目标像素宽度 / 物体世界宽度 * 视锥宽度
-            const zoomW = (AABBParams.targetW / window.innerWidth) * frustumW / size.x;
-            const zoomH = (AABBParams.targetH / window.innerHeight) * frustumHeight / size.y;
+            // 修改点：将 window.innerWidth/Height 替换为恒定的 CANVAS_SIZE
+            const zoomW = (AABBParams.targetW / CANVAS_SIZE) * frustumW / size.x;
+            const zoomH = (AABBParams.targetH / CANVAS_SIZE) * frustumHeight / size.y;
 
-            // 取两者较小值，确保物体始终完整显示在框内
             camera.zoom = Math.min(zoomW, zoomH);
             camera.updateProjectionMatrix();
         }
@@ -427,40 +675,33 @@
         const bgCanvas = document.getElementById('bgCanvas');
         const ctx = bgCanvas.getContext('2d');
 
-        // 绘制带有箭头和数值的虚线标注
         function drawDimensionLine(start, end, text, isVertical = false) {
             ctx.save();
-            ctx.strokeStyle = '#000';
+            ctx.strokeStyle = '#FFF';
             ctx.lineWidth = 1.5;
 
-            // 1. 绘制虚线主体
-            ctx.setLineDash([1.5, 5]);
             ctx.beginPath();
 
             if (isVertical) {
                 ctx.moveTo(start.x, start.y + 4);
                 ctx.lineTo(end.x, end.y - 4);
                 ctx.stroke();
-                ctx.setLineDash([]); // 重置为实线
+                // ctx.setLineDash([]);
             } else {
                 ctx.moveTo(start.x + 4, start.y);
                 ctx.lineTo(end.x - 4, end.y);
                 ctx.stroke();
-                ctx.setLineDash([]); // 重置为实线
             }
 
             ctx.lineWidth = 1;
-            // 2. 绘制两端短竖线 (界线)
-            const tickSize = 5; // 短竖线长度
+            const tickSize = 5;
             ctx.beginPath();
             if (isVertical) {
-                // 横向的短线 (垂直标注时)
                 ctx.moveTo(start.x - tickSize, start.y);
                 ctx.lineTo(start.x + tickSize, start.y);
                 ctx.moveTo(end.x - tickSize, end.y);
                 ctx.lineTo(end.x + tickSize, end.y);
             } else {
-                // 纵向的短线 (水平标注时)
                 ctx.moveTo(start.x, start.y - tickSize);
                 ctx.lineTo(start.x, start.y + tickSize);
                 ctx.moveTo(end.x, end.y - tickSize);
@@ -468,9 +709,8 @@
             }
             ctx.stroke();
 
-            // 3. 绘制实心箭头
             const arrowSize = 0;
-            ctx.fillStyle = '#000';
+            ctx.fillStyle = '#FFFFFF';
             [start, end].forEach(point => {
                 ctx.beginPath();
                 if (isVertical) {
@@ -485,16 +725,14 @@
                 ctx.fill();
             });
 
-            // 4. 绘制数值文字
             ctx.font = 'medium 12px monospace';
             ctx.textAlign = 'center';
             const midX = (start.x + end.x) / 2;
             const midY = (start.y + end.y) / 2;
             if (isVertical) {
-                // 让文字绕着 midX, midY 旋转 90 度
                 ctx.save();
-                ctx.translate(midX - 10, midY); // 稍微向左偏移，避免压线
-                ctx.rotate(-Math.PI / 2);      // 旋转 90 度
+                ctx.translate(midX - 10, midY);
+                ctx.rotate(-Math.PI / 2);
                 ctx.fillText(text, 0, 0);
                 ctx.restore();
             } else {
@@ -504,34 +742,32 @@
         }
 
         function updateBackgroundCanvas(w, h) {
-            // 这里清空画布的尺寸必须是实际的像素尺寸 (width * dpr)
-            ctx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
-
-            // 关键：这里的中心点是 CSS 逻辑像素的中心 (window.innerWidth / 2)
-            // 即使 bgCanvas.width 是 2000，这里的 centerX 依然应该是 1000
-            const centerX = window.innerWidth / 2;
-            const centerY = window.innerHeight / 2;
-
+            // 1. 最彻底的清理方式：临时重置画布矩阵，清理整个物理尺寸，然后恢复状态
             ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+            ctx.restore();
 
-            const padding = 30;
+            const centerX = CANVAS_SIZE / 2;
+            const centerY = CANVAS_SIZE / 2;
+
+            // （已删除了这里原本多余导致报错的 ctx.save()）
+
+            const padding = 50;
             const rectW = w + padding * 2;
             const rectH = h + padding * 2;
 
             ctx.save();
             ctx.translate(centerX, centerY);
 
-            // 1. 绘制主体矩形 (带旋转)
             ctx.save();
             ctx.fillStyle = '#ebebeb';
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)'; // 阴影颜色（半透明黑）
-            ctx.shadowBlur = 3;                    // 阴影模糊程度
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 3;
             ctx.shadowOffsetX = ctx.shadowOffsetY = 2;
             ctx.fillRect(-rectW / 2, -rectH / 2, rectW, rectH);
-            ctx.fill();
             ctx.restore();
 
-            // 1. Width 标注 (上方)
             const linepadding = 20;
             drawDimensionLine(
                 { x: -rectW / 2, y: -rectH / 2 - linepadding },
@@ -539,7 +775,6 @@
                 `${Math.round(w)} px`, false
             );
 
-            // 2. Height 标注 (左侧)
             drawDimensionLine(
                 { x: -rectW / 2 - linepadding, y: -rectH / 2 },
                 { x: -rectW / 2 - linepadding, y: rectH / 2 },
@@ -548,69 +783,64 @@
 
             ctx.restore();
         }
-        function resizeCanvases() {
-            const dpr = window.devicePixelRatio || 3; // 获取缩放比，通常是 2 或 3
-            const width = window.innerWidth;
-            const height = window.innerHeight;
 
-            // 1. 同步 bgCanvas (2D 背景层)
-            // 放大内部缓冲区
+        function resizeCanvases() {
+            // 修改点：强制锁定 Canvas 内部逻辑和 CSS 渲染均为 1300px
+            const dpr = window.devicePixelRatio || 3;
+            const width = CANVAS_SIZE;
+            const height = CANVAS_SIZE;
+
             bgCanvas.width = width * dpr;
             bgCanvas.height = height * dpr;
 
-            // 强制 CSS 大小为屏幕物理尺寸
             bgCanvas.style.width = width + 'px';
             bgCanvas.style.height = height + 'px';
 
-            // 2. 缩放绘图上下文，确保后续绘制坐标比例正确
+            ctx.setTransform(1, 0, 0, 1, 0, 0); // 重置之前的缩放
             ctx.scale(dpr, dpr);
 
-            // 3. 同步 Three.js Renderer
             renderer.setPixelRatio(dpr);
             renderer.setSize(width, height);
         }
         resizeCanvases();
-        window.addEventListener('resize', resizeCanvases);
+
+        // 我们移除了窗口响应监听，以防止浏览器缩放破坏 1300px 规则
+        // window.addEventListener('resize', resizeCanvases);
 
         // ==========================================
         // 录屏模块 (MediaRecorder + Composite Canvas)
         // ==========================================
-// ==========================================
-        // 自动循环录屏模块 (MediaRecorder + Composite Canvas)
-        // ==========================================
         let mediaRecorder;
         let recordedChunks = [];
         let isRecording = false;
-        
-        // 自动录屏状态控制
-        let isWaitingForLoop = false; // 是否正在等待循环回到起点
-        let isRecordingLoop = false;  // 是否正在录制中
+
+        let isWaitingForLoop = false;
+        let isRecordingLoop = false;
 
         const compositeCanvas = document.createElement('canvas');
         const compositeCtx = compositeCanvas.getContext('2d');
         const btnAutoRecord = document.getElementById('btnAutoRecord');
 
-        // 用户点击按钮，进入等待状态
         btnAutoRecord.addEventListener('click', () => {
             if (isWaitingForLoop || isRecordingLoop) return;
             isWaitingForLoop = true;
             btnAutoRecord.innerText = "⏳ Waiting for loop start...";
-            btnAutoRecord.style.background = "#ff9900"; // 变成橙色等待
+            btnAutoRecord.style.background = "#ff9900";
         });
 
-        // 开始真正的录制（由内部循环触发）
         function startRecording() {
             const dpr = window.devicePixelRatio || 3;
-            
-            compositeCanvas.width = window.innerWidth * dpr;
-            compositeCanvas.height = window.innerHeight * dpr;
-            
-            const stream = compositeCanvas.captureStream(30); 
-const options = { 
-            mimeType: 'video/webm; codecs=vp9',
-            videoBitsPerSecond: 10000000 // 强制 10 Mbps 码率 (10000000 bits/s)
-        };
-                    try { mediaRecorder = new MediaRecorder(stream, options); } 
+
+            // 修改点：导出视频也是严格基于 1300px 视口建立的
+            compositeCanvas.width = CANVAS_SIZE * dpr;
+            compositeCanvas.height = CANVAS_SIZE * dpr;
+
+            const stream = compositeCanvas.captureStream(30);
+            const options = {
+                mimeType: 'video/webm; codecs=vp9',
+                videoBitsPerSecond: 10000000
+            };
+            try { mediaRecorder = new MediaRecorder(stream, options); }
             catch (e) { mediaRecorder = new MediaRecorder(stream); }
 
             recordedChunks = [];
@@ -636,32 +866,30 @@ const options = {
             mediaRecorder.start();
             isRecording = true;
             isRecordingLoop = true;
-            
+
             btnAutoRecord.innerText = "🔴 Recording Loop...";
-            btnAutoRecord.style.background = "#ff4444"; // 变成红色录制中
-            
+            btnAutoRecord.style.background = "#ff4444";
+
             recordLoop();
         }
 
-        // 停止录制（由内部循环触发）
         function stopRecording() {
             isRecording = false;
             isRecordingLoop = false;
             mediaRecorder.stop();
-            
+
             btnAutoRecord.innerText = "⏺ Auto Record 1 Loop";
-            btnAutoRecord.style.background = "#000"; // 恢复黑色
+            btnAutoRecord.style.background = "#000";
         }
 
-        // 画面合成渲染循环
         function recordLoop() {
             if (!isRecording) return;
-compositeCtx.fillStyle = '#ffffff';
+            compositeCtx.fillStyle = '#ffffff';
             compositeCtx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
-            
+
             const bg = document.getElementById('bgCanvas');
             const fg = document.getElementById('rendererCanvas');
-            
+
             if (bg) compositeCtx.drawImage(bg, 0, 0, compositeCanvas.width, compositeCanvas.height);
             if (fg) compositeCtx.drawImage(fg, 0, 0, compositeCanvas.width, compositeCanvas.height);
 
